@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Socket.IO Connection Test</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        padding: 20px;
+        max-width: 800px;
+        margin: 0 auto;
+        line-height: 1.5;
+      }
+      h1 {
+        color: #333;
+      }
+      #log {
+        border: 1px solid #ccc;
+        padding: 10px;
+        background-color: #f5f5f5;
+        height: 300px;
+        overflow-y: auto;
+        margin-bottom: 20px;
+        font-family: monospace;
+      }
+      .success {
+        color: green;
+        font-weight: bold;
+      }
+      .error {
+        color: red;
+        font-weight: bold;
+      }
+      .info {
+        color: blue;
+      }
+      button {
+        padding: 10px 15px;
+        background-color: #4caf50;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        margin-right: 10px;
+        margin-bottom: 10px;
+      }
+      button:hover {
+        background-color: #45a049;
+      }
+      .status {
+        font-weight: bold;
+        padding: 5px 10px;
+        border-radius: 3px;
+        display: inline-block;
+        margin-bottom: 10px;
+      }
+      .connected {
+        background-color: #4caf50;
+        color: white;
+      }
+      .disconnected {
+        background-color: #f44336;
+        color: white;
+      }
+      .connecting {
+        background-color: #ff9800;
+        color: white;
+      }
+      .test-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 10px;
+        margin-bottom: 20px;
+      }
+      #advanced-options {
+        margin-top: 20px;
+        border: 1px solid #ddd;
+        padding: 15px;
+        border-radius: 5px;
+      }
+      .option-group {
+        margin-bottom: 10px;
+      }
+      label {
+        display: block;
+        margin-bottom: 5px;
+        font-weight: bold;
+      }
+      input[type="text"],
+      select {
+        width: 100%;
+        padding: 8px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Socket.IO Connection Test</h1>
+
+    <div id="statusContainer">
+      <div class="status disconnected" id="connectionStatus">Disconnected</div>
+    </div>
+
+    <div class="test-grid">
+      <button id="testLocal3000">
+        Test Direct Connection to localhost:3000
+      </button>
+      <button id="testLocalCurrent">Test Connection to Current Host</button>
+      <button id="testWebsocketOnly">Test WebSocket Only</button>
+      <button id="testPollingOnly">Test Polling Only</button>
+    </div>
+
+    <div id="advanced-options">
+      <h3>Advanced Connection Options</h3>
+
+      <div class="option-group">
+        <label for="customUrl">Custom URL:</label>
+        <input
+          type="text"
+          id="customUrl"
+          placeholder="e.g., http://localhost:3000"
+        />
+      </div>
+
+      <div class="option-group">
+        <label for="transportMode">Transport Mode:</label>
+        <select id="transportMode">
+          <option value="both">Both (WebSocket & Polling)</option>
+          <option value="websocket">WebSocket Only</option>
+          <option value="polling">Polling Only</option>
+        </select>
+      </div>
+
+      <div class="option-group">
+        <label for="timeout">Timeout (ms):</label>
+        <input type="text" id="timeout" value="5000" />
+      </div>
+
+      <button id="testCustom">Test Custom Connection</button>
+    </div>
+
+    <div id="log"></div>
+
+    <div>
+      <h3>Network Information:</h3>
+      <pre id="networkInfo"></pre>
+    </div>
+
+    <script>
+      // Logging helper
+      const logElement = document.getElementById("log");
+      const statusElement = document.getElementById("connectionStatus");
+
+      function log(message, type = "info") {
+        const timestamp = new Date().toISOString().substring(11, 19);
+        const entry = document.createElement("div");
+        entry.className = type;
+        entry.innerHTML = `[${timestamp}] ${message}`;
+        logElement.appendChild(entry);
+        logElement.scrollTop = logElement.scrollHeight;
+        console.log(`[${type}] ${message}`);
+      }
+
+      function updateStatus(status) {
+        statusElement.className = `status ${status.toLowerCase()}`;
+        statusElement.textContent = status;
+      }
+
+      // Display network information
+      function displayNetworkInfo() {
+        const info = {
+          userAgent: navigator.userAgent,
+          currentOrigin: window.location.origin,
+          protocol: window.location.protocol,
+          hostname: window.location.hostname,
+          port: window.location.port,
+          pathname: window.location.pathname,
+          ioAvailable: typeof io !== "undefined",
+          cookiesEnabled: navigator.cookieEnabled,
+          online: navigator.onLine,
+          connectionType: navigator.connection
+            ? navigator.connection.effectiveType
+            : "unknown",
+        };
+
+        document.getElementById("networkInfo").textContent = JSON.stringify(
+          info,
+          null,
+          2
+        );
+      }
+
+      displayNetworkInfo();
+
+      // Socket.IO testing functions
+      let socket = null;
+
+      function cleanupSocket() {
+        if (socket) {
+          log("Cleaning up previous socket connection");
+          try {
+            socket.disconnect();
+            socket.off();
+          } catch (err) {
+            log(`Error cleaning up socket: ${err.message}`, "error");
+          }
+          socket = null;
+        }
+      }
+
+      function setupSocketEvents() {
+        updateStatus("Connecting");
+
+        socket.on("connect", () => {
+          log(`Connected! Socket ID: ${socket.id}`, "success");
+          updateStatus("Connected");
+          log(`Transport: ${socket.io.engine.transport.name}`);
+
+          // Test sending and receiving data
+          socket.emit("test", { message: "Hello from test page" });
+        });
+
+        socket.on("connect_error", (err) => {
+          log(`Connection error: ${err.message}`, "error");
+          updateStatus("Disconnected");
+          console.error("Connect error details:", err);
+        });
+
+        socket.on("disconnect", (reason) => {
+          log(`Disconnected: ${reason}`, "error");
+          updateStatus("Disconnected");
+        });
+
+        socket.on("connectionAck", (data) => {
+          log(
+            `Connection acknowledged by server: ${JSON.stringify(data)}`,
+            "success"
+          );
+        });
+
+        // Handle ping/pong explicitly for debugging
+        socket.io.on("ping", () => {
+          log("Ping sent to server", "info");
+        });
+
+        socket.io.on("pong", (latency) => {
+          log(`Pong received from server (latency: ${latency}ms)`, "info");
+        });
+
+        // Log all incoming events
+        const onevent = socket.onevent;
+        socket.onevent = function (packet) {
+          const args = packet.data || [];
+          if (
+            args[0] !== "connect" &&
+            args[0] !== "disconnect" &&
+            args[0] !== "connect_error" &&
+            args[0] !== "connectionAck"
+          ) {
+            log(`Received event "${args[0]}"`, "info");
+            console.log("Event data:", args);
+          }
+          onevent.call(this, packet);
+        };
+      }
+
+      // Connection functions
+      function testLocalhost3000() {
+        cleanupSocket();
+        log("Testing direct connection to http://localhost:3000", "info");
+
+        try {
+          socket = io("http://localhost:3000", {
+            transports: ["websocket", "polling"],
+            reconnection: true,
+            timeout: 5000,
+          });
+
+          setupSocketEvents();
+        } catch (error) {
+          log(`Error creating socket: ${error.message}`, "error");
+        }
+      }
+
+      function testCurrentHost() {
+        cleanupSocket();
+        const currentOrigin = window.location.origin;
+        log(`Testing connection to current origin: ${currentOrigin}`, "info");
+
+        try {
+          socket = io(currentOrigin, {
+            transports: ["websocket", "polling"],
+            reconnection: true,
+            timeout: 5000,
+          });
+
+          setupSocketEvents();
+        } catch (error) {
+          log(`Error creating socket: ${error.message}`, "error");
+        }
+      }
+
+      function testWebsocketOnly() {
+        cleanupSocket();
+        log("Testing WebSocket-only connection", "info");
+
+        try {
+          socket = io("http://localhost:3000", {
+            transports: ["websocket"],
+            reconnection: true,
+            timeout: 5000,
+          });
+
+          setupSocketEvents();
+        } catch (error) {
+          log(`Error creating socket: ${error.message}`, "error");
+        }
+      }
+
+      function testPollingOnly() {
+        cleanupSocket();
+        log("Testing Polling-only connection", "info");
+
+        try {
+          socket = io("http://localhost:3000", {
+            transports: ["polling"],
+            reconnection: true,
+            timeout: 5000,
+          });
+
+          setupSocketEvents();
+        } catch (error) {
+          log(`Error creating socket: ${error.message}`, "error");
+        }
+      }
+
+      function testCustomConnection() {
+        cleanupSocket();
+
+        const customUrl =
+          document.getElementById("customUrl").value || "http://localhost:3000";
+        const transportMode = document.getElementById("transportMode").value;
+        const timeout =
+          parseInt(document.getElementById("timeout").value) || 5000;
+
+        let transports;
+        switch (transportMode) {
+          case "websocket":
+            transports = ["websocket"];
+            break;
+          case "polling":
+            transports = ["polling"];
+            break;
+          default:
+            transports = ["websocket", "polling"];
+        }
+
+        log(
+          `Testing custom connection to ${customUrl} using ${transports.join(
+            ", "
+          )}`,
+          "info"
+        );
+
+        try {
+          socket = io(customUrl, {
+            transports: transports,
+            reconnection: true,
+            timeout: timeout,
+            forceNew: true,
+          });
+
+          setupSocketEvents();
+        } catch (error) {
+          log(`Error creating socket: ${error.message}`, "error");
+        }
+      }
+
+      // Event listeners
+      document
+        .getElementById("testLocal3000")
+        .addEventListener("click", testLocalhost3000);
+      document
+        .getElementById("testLocalCurrent")
+        .addEventListener("click", testCurrentHost);
+      document
+        .getElementById("testWebsocketOnly")
+        .addEventListener("click", testWebsocketOnly);
+      document
+        .getElementById("testPollingOnly")
+        .addEventListener("click", testPollingOnly);
+      document
+        .getElementById("testCustom")
+        .addEventListener("click", testCustomConnection);
+
+      // Initial connection test
+      document.addEventListener("DOMContentLoaded", () => {
+        log("Page loaded. Click a test button to begin testing.", "info");
+      });
+    </script>
+  </body>
+</html>
