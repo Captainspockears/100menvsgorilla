@@ -164,6 +164,11 @@ function traceSocketEvents(socket) {
     "playerJoined",
     "playerLeft",
     "hostAssigned",
+    "lobbiesList",
+    "lobbyJoined",
+    "lobbyUpdated",
+    "gameStarted",
+    "lobbyError",
   ];
   gameEvents.forEach((event) => {
     socket.on(event, (data) => {
@@ -189,6 +194,8 @@ export class MultiplayerManager {
     this.isConnected = false; // Track connection state
     this.connectionAttempts = 0;
     this.maxConnectionAttempts = 5;
+    this.inGame = false; // Track if player is currently in a game
+    this.lobbyManager = null; // Reference to the lobby manager
 
     // Debug helpers
     this.debugEnabled = true;
@@ -240,6 +247,35 @@ export class MultiplayerManager {
     this.debugOverlay.id = "multiplayer-debug";
     this.debugOverlay.innerHTML = "Multiplayer: Disconnected";
     document.body.appendChild(this.debugOverlay);
+  }
+
+  // Show connection status message in UI
+  showConnectionStatus(message, type = "info") {
+    debugLog(message, type);
+
+    // Update the connection status in UI if available
+    const statusMessage = document.getElementById("connection-status-message");
+    if (statusMessage) {
+      statusMessage.textContent = message;
+
+      // Apply styling based on message type
+      switch (type) {
+        case "error":
+          statusMessage.style.color = "#f44336"; // Red
+          break;
+        case "success":
+          statusMessage.style.color = "#4CAF50"; // Green
+          break;
+        case "warning":
+          statusMessage.style.color = "#ff9800"; // Orange
+          break;
+        default:
+          statusMessage.style.color = "#2196F3"; // Blue
+      }
+    }
+
+    // Also update debug overlay
+    this.updateDebugOverlay();
   }
 
   // Update debug overlay with current state
@@ -323,338 +359,281 @@ export class MultiplayerManager {
     this.gameRef = game;
   }
 
-  // Initialize connection to the server
-  connect(localPlayer) {
+  // Set the lobby manager
+  setLobbyManager(lobbyManager) {
+    this.lobbyManager = lobbyManager;
+
+    // If we already have a socket, set it in the lobby manager
+    if (this.socket && this.lobbyManager) {
+      this.lobbyManager.setSocket(this.socket);
+    }
+  }
+
+  // Connect to multiplayer server
+  connect(localPlayer, useLobbies = true) {
+    debugLog("Connecting to multiplayer server...");
+
+    if (this.socket?.connected) {
+      debugLog("Already connected to server!", "warning");
+      this.isConnected = true;
+      if (this.onConnected) this.onConnected();
+      return;
+    }
+
     this.localPlayer = localPlayer;
-    debugLog("[DEBUG] connect() called with localPlayer", "info");
-    debugLog("[DEBUG] Browser URL: " + window.location.href, "info");
-    debugLog("[DEBUG] Origin: " + window.location.origin, "info");
-    debugLog("[DEBUG] Protocol: " + window.location.protocol, "info");
-    debugLog("[DEBUG] Hostname: " + window.location.hostname, "info");
-    debugLog("[DEBUG] Port: " + window.location.port, "info");
+    this.isConnected = false;
+    this.connectionAttempts = 0;
 
-    // First check if we are already using a public URL
-    if (
-      window.location.hostname.includes("ngrok") ||
-      window.location.hostname.includes("ngrok-free")
-    ) {
-      this.showConnectionStatus(
-        "Using public server at " + window.location.origin,
-        "info"
-      );
-    }
-    // Check if server has a public URL and show it to the user
-    else if (
-      window.location.hostname === "localhost" ||
-      window.location.hostname === "127.0.0.1"
-    ) {
-      fetch("http://localhost:3000/public-url")
-        .then((response) => response.json())
-        .then((data) => {
-          if (data && data.url) {
-            this.showConnectionStatus(
-              "Public server available at: " + data.url,
-              "success"
-            );
-            // Create a clickable link for sharing
-            let statusElement = document.getElementById("connection-status");
-            if (statusElement) {
-              // Enhance the status with a QR code and share button
-              statusElement.innerHTML = `
-                <div style="text-align: center; margin-bottom: 10px;">
-                  <strong>Public server available!</strong>
-                </div>
-                <div>Share this link with friends:</div>
-                <div style="margin: 10px 0; word-break: break-all;">
-                  <a href="${data.url}" target="_blank" style="color: #4CAF50;">${data.url}</a>
-                </div>
-                <div style="margin-top: 10px;">
-                  <button id="copy-url-btn" style="padding: 5px 10px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;">
-                    Copy Link
-                  </button>
-                </div>
-              `;
+    // Clear any existing remote players
+    this.clearRemotePlayers();
 
-              // Add click handler for the copy button
-              setTimeout(() => {
-                const copyBtn = document.getElementById("copy-url-btn");
-                if (copyBtn) {
-                  copyBtn.addEventListener("click", () => {
-                    navigator.clipboard.writeText(data.url).then(() => {
-                      copyBtn.textContent = "Copied!";
-                      setTimeout(() => {
-                        copyBtn.textContent = "Copy Link";
-                      }, 2000);
-                    });
-                  });
-                }
-              }, 100);
-
-              // Don't automatically hide this message
-              return;
-            }
-          }
-        })
-        .catch((err) => {
-          debugLog(
-            `[DEBUG] Error checking for public URL: ${err.message}`,
-            "warning"
-          );
-        });
+    // Ask for player name if not already set
+    if (!this.playerName || this.playerName === "Player") {
+      const savedName = localStorage.getItem("playerName");
+      if (savedName) {
+        this.playerName = savedName;
+      } else {
+        const name = prompt(
+          "Enter your name:",
+          "Player" + Math.floor(Math.random() * 1000)
+        );
+        this.playerName = name || "Player" + Math.floor(Math.random() * 1000);
+        try {
+          localStorage.setItem("playerName", this.playerName);
+        } catch (e) {
+          console.warn("Could not save player name to localStorage", e);
+        }
+      }
     }
 
-    // Get player name (can be customized)
-    this.playerName = prompt("Enter your name:", "Player") || "Player";
-    debugLog(`Player name set to: ${this.playerName}`);
-
-    // Force reset player position to center spawn point (0,0,0)
-    this.localPlayer.group.position.set(0, 0, 0);
-
-    this.debug("Connecting to server...");
-    debugLog("[DEBUG] Beginning connection process", "info");
-    console.log("[Multiplayer] Local player:", this.localPlayer);
-
-    // Create debug sphere at player position
-    this.addDebugSphere(this.localPlayer.group.position, 0x0000ff, 0.5);
-
-    // Show connection status to user
-    this.showConnectionStatus("Connecting to server...", "info");
-
-    // Clean up any existing socket connection
-    this.cleanupSocket();
-
-    // Make sure Socket.IO is loaded
+    // Load socket.io client library
+    this.showConnectionStatus("Loading Socket.IO client...", "info");
     loadSocketIO()
       .then((ioInstance) => {
-        debugLog(
-          "[DEBUG] Socket.IO loaded successfully, connecting now",
-          "success"
-        );
-        this.connectToServer(ioInstance);
+        debugLog("Socket.IO loaded, connecting to server...");
+        this.connectToServer(ioInstance, useLobbies);
       })
       .catch((err) => {
-        debugLog(`[DEBUG] Failed to load Socket.IO: ${err.message}`, "error");
+        debugLog(`Failed to load Socket.IO: ${err.message}`, "error");
         this.showConnectionStatus(
-          "Failed to load Socket.IO. Please refresh the page.",
+          "Failed to load Socket.IO client. Please refresh the page and try again.",
           "error"
         );
       });
   }
 
-  // Connect to server using a simpler, more direct approach
-  connectToServer(ioInstance) {
+  // Connect to server using the loaded Socket.IO instance
+  connectToServer(ioInstance, useLobbies = true) {
+    debugLog("Trying to connect to server...");
+    this.showConnectionStatus("Connecting to server...", "info");
+
+    // First try with explicit URL
+    this.connectToUrl(ioInstance, window.location.origin, useLobbies).catch(
+      (error) => {
+        debugLog(
+          `Failed to connect to ${window.location.origin}: ${error.message}`,
+          "error"
+        );
+        this.showConnectionStatus(
+          `Connection failed. Trying backup options...`,
+          "warning"
+        );
+
+        // Then try fallback options
+        this.connectFallback(ioInstance, useLobbies);
+      }
+    );
+  }
+
+  // Connect to a specific URL
+  connectToUrl(ioInstance, url, useLobbies = true) {
+    return new Promise((resolve, reject) => {
+      debugLog(`Attempting to connect to: ${url}`);
+
+      try {
+        const socket = ioInstance(url, {
+          transports: ["websocket", "polling"],
+          reconnectionAttempts: 3,
+          timeout: 10000,
+          reconnectionDelay: 1000,
+          reconnectionDelayMax: 5000,
+        });
+
+        // Set up connection event listeners
+        socket.once("connect", () => {
+          debugLog(`Successfully connected to ${url}`, "success");
+          this.socket = socket;
+          this.isConnected = true;
+
+          // Set up socket event listeners
+          this.setupConnectionEvents();
+          this.setupGameEvents(useLobbies);
+
+          // Add detailed event tracing
+          traceSocketEvents(socket);
+
+          // Allow the lobby manager to use this socket if provided
+          if (this.lobbyManager && useLobbies) {
+            this.lobbyManager.setSocket(socket);
+            // Instead of joining game directly, we'll show the lobby screen
+            this.lobbyManager.showLobbyScreen();
+          } else {
+            // Join the game directly if not using lobbies
+            this.joinGame();
+          }
+
+          // Resolve the promise
+          resolve(socket);
+        });
+
+        socket.once("connect_error", (error) => {
+          debugLog(`Connection error to ${url}: ${error.message}`, "error");
+          reject(error);
+        });
+
+        socket.once("connect_timeout", () => {
+          debugLog(`Connection timeout to ${url}`, "error");
+          reject(new Error("Connection timeout"));
+        });
+      } catch (error) {
+        debugLog(`Error creating socket for ${url}: ${error.message}`, "error");
+        reject(error);
+      }
+    });
+  }
+
+  // Try fallback connection options
+  connectFallback(ioInstance, useLobbies = true) {
+    debugLog("Trying fallback connection options...", "info");
     this.connectionAttempts++;
 
-    debugLog(
-      `[DEBUG] Connection attempt ${this.connectionAttempts}/${this.maxConnectionAttempts}`,
+    // Build array of URLs to try in sequence
+    const fallbackUrls = [
+      "http://localhost:3000",
+      window.location.href,
+      `${window.location.protocol}//${window.location.hostname}:3000`,
+      "https://hen-clear-hornet.ngrok-free.app",
+    ];
+
+    // Show status
+    this.showConnectionStatus(
+      `Connection attempt ${this.connectionAttempts}/${this.maxConnectionAttempts}...`,
       "info"
     );
 
-    // Use a simple, direct connection approach first
-    try {
-      // When connecting through ngrok, we need to use the current origin
-      // but let Socket.IO use its own path (/socket.io) which will be proxied
-      // by Vite to the actual backend server
-      let serverUrl = window.location.origin;
-
-      debugLog(`[DEBUG] Window location: ${window.location.href}`, "info");
-      debugLog(`[DEBUG] Using server URL: ${serverUrl}`, "info");
-
-      // Create a very basic connection with minimal options
-      const connectionOptions = {
-        path: "/socket.io",
-        reconnection: true,
-        transports: ["websocket", "polling"],
-        // Important for working through ngrok
-        forceNew: true,
-        timeout: 10000,
-      };
-
-      debugLog(
-        `[DEBUG] Connection options: ${JSON.stringify(connectionOptions)}`,
-        "info"
-      );
-
-      // Create socket connection
-      try {
-        debugLog(`[DEBUG] Attempting to create socket to ${serverUrl}`, "info");
-        this.socket = ioInstance(serverUrl, connectionOptions);
-        debugLog("[DEBUG] Socket created successfully", "success");
-      } catch (err) {
-        debugLog(`[DEBUG] Error creating socket: ${err.message}`, "error");
-        throw err;
-      }
-
-      // Set up event tracing
-      traceSocketEvents(this.socket);
-
-      // Set up connection events
-      this.setupConnectionEvents();
-
-      // Add a timeout if it doesn't connect
-      setTimeout(() => {
-        if (!this.isConnected) {
-          debugLog("[DEBUG] Connection timed out, trying fallback", "warning");
-          this.connectFallback(ioInstance);
-        }
-      }, 5000); // shorter timeout
-    } catch (error) {
-      debugLog(`[DEBUG] Connection error: ${error.message}`, "error");
-      this.connectFallback(ioInstance);
-    }
-  }
-
-  // Helper method to connect to a specific URL
-  connectToUrl(ioInstance, url) {
-    debugLog(`[DEBUG] Attempting connection to: ${url}`, "info");
-
-    try {
-      // Clean up previous socket if it exists
-      this.cleanupSocket();
-
-      // Create connection options
-      const connectionOptions = {
-        reconnection: true,
-        transports: ["websocket", "polling"],
-      };
-
-      // Create socket connection
-      this.socket = ioInstance(url, connectionOptions);
-      debugLog(`[DEBUG] Socket created for URL: ${url}`, "success");
-
-      // Set up event tracing
-      traceSocketEvents(this.socket);
-
-      // Set up connection events
-      this.setupConnectionEvents();
-    } catch (err) {
-      debugLog(`[DEBUG] Error connecting to ${url}: ${err.message}`, "error");
-    }
-  }
-
-  // Fallback connection approach
-  connectFallback(ioInstance) {
-    try {
-      debugLog("[DEBUG] Trying fallback connection approach", "info");
-
-      // Clean up previous socket
-      this.cleanupSocket();
-
-      // Try to connect directly to the socket.io path
-      const directUrl = `${window.location.origin}/socket.io`;
-      debugLog("[DEBUG] Trying direct socket.io path: " + directUrl, "info");
-
-      try {
-        this.socket = ioInstance(window.location.origin, {
-          path: "/socket.io",
-          reconnection: true,
-          transports: ["polling", "websocket"], // Try polling first
-          timeout: 15000,
-          forceNew: true,
-        });
-        debugLog("[DEBUG] Created fallback socket connection", "success");
-      } catch (err) {
-        debugLog(`[DEBUG] Error creating fallback socket: ${err}`, "error");
-        throw err;
-      }
-
-      // Set up event tracing
-      traceSocketEvents(this.socket);
-
-      // Set up connection events again
-      this.setupConnectionEvents();
-
-      // Final status check
-      setTimeout(() => {
-        debugLog(
-          `[DEBUG] Fallback connection status after 4s: ${
-            this.isConnected ? "Connected" : "Failed"
-          }`,
-          "info"
+    // Try each URL in sequence
+    const tryNextUrl = (index) => {
+      if (
+        index >= fallbackUrls.length ||
+        this.connectionAttempts > this.maxConnectionAttempts
+      ) {
+        // All URLs tried or max attempts reached
+        this.showConnectionStatus(
+          "Failed to connect. Please check your network or try again later.",
+          "error"
         );
-
-        if (!this.isConnected) {
-          debugLog("[DEBUG] All connection approaches failed", "error");
-          this.showConnectionStatus(
-            "Cannot connect to the server. Verify the server is running.",
-            "error"
-          );
-        }
-      }, 4000);
-    } catch (error) {
-      debugLog(`[DEBUG] Fatal connection error: ${error.message}`, "error");
-      this.showConnectionStatus(
-        "Connection failed. Please check if the server is running.",
-        "error"
-      );
-    }
-  }
-
-  // Clean up existing socket connection
-  cleanupSocket() {
-    if (this.socket) {
-      debugLog("Cleaning up previous socket connection", "info");
-      try {
-        this.socket.disconnect();
-        this.socket.removeAllListeners();
-      } catch (err) {
-        debugLog(`Error cleaning up socket: ${err.message}`, "error");
+        return;
       }
-      this.socket = null;
-    }
+
+      const url = fallbackUrls[index];
+      debugLog(`Trying fallback URL: ${url}`, "info");
+
+      this.connectToUrl(ioInstance, url, useLobbies).catch((error) => {
+        debugLog(`Failed to connect to ${url}: ${error.message}`, "error");
+        this.connectionAttempts++;
+        // Try next URL
+        tryNextUrl(index + 1);
+      });
+    };
+
+    // Start with first URL
+    tryNextUrl(0);
   }
 
-  // Handle showing connection status to user
-  showConnectionStatus(message, type = "info") {
-    debugLog(`Status: ${message}`, type);
-
-    // Create or update connection status element
-    let statusElement = document.getElementById("connection-status");
-    if (!statusElement) {
-      statusElement = document.createElement("div");
-      statusElement.id = "connection-status";
-      statusElement.style.position = "absolute";
-      statusElement.style.top = "50%"; // Center vertically
-      statusElement.style.left = "50%";
-      statusElement.style.transform = "translate(-50%, -50%)";
-      statusElement.style.padding = "15px 20px";
-      statusElement.style.backgroundColor = "rgba(0,0,0,0.8)";
-      statusElement.style.color = "white";
-      statusElement.style.borderRadius = "8px";
-      statusElement.style.zIndex = "2000";
-      statusElement.style.fontFamily = "Arial, sans-serif";
-      document.body.appendChild(statusElement);
+  // Join game after connection is established
+  joinGame() {
+    if (!this.socket || !this.isConnected) {
+      debugLog("Cannot join game - not connected", "error");
+      return;
     }
 
-    // Set color based on status type
-    switch (type) {
-      case "error":
-        statusElement.style.borderLeft = "4px solid #f44336";
-        break;
-      case "success":
-        statusElement.style.borderLeft = "4px solid #4CAF50";
-        break;
-      case "warning":
-        statusElement.style.borderLeft = "4px solid #ff9800";
-        break;
-      default:
-        statusElement.style.borderLeft = "4px solid #2196F3";
+    debugLog(`Joining game as ${this.playerName}`);
+    this.inGame = true;
+
+    try {
+      // Handle different player property structures safely
+      const playerPosition = { x: 0, y: 0, z: 0 };
+      const playerRotation = { y: 0 };
+
+      // Try to get position from group first (most likely structure)
+      if (this.localPlayer?.group?.position) {
+        playerPosition.x = this.localPlayer.group.position.x || 0;
+        playerPosition.y = this.localPlayer.group.position.y || 0;
+        playerPosition.z = this.localPlayer.group.position.z || 0;
+      }
+      // Fall back to direct position if exists
+      else if (this.localPlayer?.position) {
+        playerPosition.x = this.localPlayer.position.x || 0;
+        playerPosition.y = this.localPlayer.position.y || 0;
+        playerPosition.z = this.localPlayer.position.z || 0;
+      }
+
+      // Try to get rotation from group
+      if (this.localPlayer?.group?.rotation) {
+        playerRotation.y = this.localPlayer.group.rotation.y || 0;
+      }
+      // Fall back to direct rotation if exists
+      else if (this.localPlayer?.rotation) {
+        playerRotation.y = this.localPlayer.rotation.y || 0;
+      }
+
+      // Join with player data
+      debugLog(
+        `Sending join with position: ${JSON.stringify(
+          playerPosition
+        )} and rotation: ${JSON.stringify(playerRotation)}`
+      );
+      this.socket.emit("join", {
+        name: this.playerName,
+        position: playerPosition,
+        rotation: playerRotation,
+      });
+    } catch (error) {
+      debugLog(`Error sending join: ${error.message}`, "error");
+
+      // Send minimal join data as fallback
+      this.socket.emit("join", {
+        name: this.playerName,
+        position: { x: 0, y: 0, z: 0 },
+        rotation: { y: 0 },
+      });
     }
 
-    // Set message and show
-    statusElement.textContent = message;
-    statusElement.style.display = "block";
+    // Start sending position updates
+    this.startSendingUpdates();
+  }
 
-    // Hide after a delay for non-error messages
-    if (type !== "error") {
-      setTimeout(() => {
-        statusElement.style.opacity = "0";
-        statusElement.style.transition = "opacity 0.5s ease";
-        setTimeout(() => {
-          statusElement.style.display = "none";
-          statusElement.style.opacity = "1";
-        }, 500);
-      }, 3000);
+  // Leave current game
+  leaveGame() {
+    if (!this.socket || !this.inGame) {
+      return;
+    }
+
+    debugLog("Leaving game");
+    this.inGame = false;
+
+    // Stop sending updates
+    this.stopSendingUpdates();
+
+    // Clear remote players
+    this.clearRemotePlayers();
+
+    // Emit leave game event
+    this.socket.emit("leaveGame");
+
+    // Show lobby screen if lobby manager exists
+    if (this.lobbyManager) {
+      this.lobbyManager.showLobbyScreen();
     }
   }
 
@@ -792,75 +771,113 @@ export class MultiplayerManager {
   }
 
   // Setup game-specific events
-  setupGameEvents() {
-    if (!this.socket) return;
+  setupGameEvents(useLobbies = true) {
+    if (!this.socket) {
+      debugLog("Cannot setup game events - socket is null", "error");
+      return;
+    }
 
-    // Server acknowledgment
-    this.socket.on("connectionAck", (data) => {
-      this.debug(`Connection acknowledged by server: ${data.id}`);
-      console.log(`[Multiplayer] Connection acknowledged by server:`, data);
-    });
+    debugLog("Setting up game event listeners");
 
-    // Existing players
-    this.socket.on("existingPlayers", (players) => {
-      this.debug(`Received ${players.length} existing players`);
-      console.log(`[Multiplayer] Received existing players:`, players);
+    if (useLobbies) {
+      // These events are handled by the lobby manager
+      // The core game events are still needed for when a game starts
+    }
 
-      this.clearRemotePlayers();
-
-      players.forEach((playerData) => {
+    // Existing players in the game
+    this.socket.on("existingPlayers", (playersData) => {
+      debugLog(`Received ${playersData.length} existing players`);
+      playersData.forEach((playerData) => {
         this.addRemotePlayer(playerData);
       });
-
-      this.updateDebugOverlay();
     });
 
-    // Player joined
+    // New player joined
     this.socket.on("playerJoined", (playerData) => {
-      this.debug(`Player joined: ${playerData.id} (${playerData.name})`);
-      console.log(`[Multiplayer] Player joined:`, playerData);
+      debugLog(`New player joined: ${playerData.name} (${playerData.id})`);
       this.addRemotePlayer(playerData);
-      this.updateDebugOverlay();
+
+      // Trigger callback if defined
+      if (this.onPlayerJoined) {
+        this.onPlayerJoined(playerData);
+      }
     });
 
-    // Player moved
+    // Player movement update
     this.socket.on("playerMoved", (data) => {
       this.updateRemotePlayer(data);
-      if (Math.random() < 0.05) this.updateDebugOverlay();
     });
 
     // Player left
     this.socket.on("playerLeft", (playerId) => {
-      this.debug(`Player left: ${playerId}`);
-      console.log(`[Multiplayer] Player left: ${playerId}`);
+      debugLog(`Player left: ${playerId}`);
       this.removeRemotePlayer(playerId);
-      this.updateDebugOverlay();
-    });
 
-    // Game state
-    this.socket.on("gameState", (gameState) => {
-      this.debug("Received game state");
-      console.log("[Multiplayer] Received game state:", gameState);
-
-      if (!this.isHost && this.gameRef) {
-        this.updateLocalGameEntities(gameState);
-      }
-    });
-
-    // Game state update
-    this.socket.on("gameStateUpdate", (gameState) => {
-      if (!this.isHost && this.gameRef) {
-        this.updateLocalGameEntities(gameState);
+      // Trigger callback if defined
+      if (this.onPlayerLeft) {
+        this.onPlayerLeft({ id: playerId });
       }
     });
 
     // Host assignment
     this.socket.on("hostAssigned", (data) => {
-      this.debug("You are now the host!");
-      console.log("[Multiplayer] You are now the host:", data);
-      this.isHost = true;
-      this.updateDebugOverlay();
-      this.startSendingGameEntityUpdates();
+      this.isHost = data.isHost;
+      debugLog(
+        `Host status: ${
+          this.isHost ? "You are the host" : "You are not the host"
+        }`
+      );
+
+      if (this.isHost) {
+        // If we're the host, start sending game entity updates
+        this.startSendingGameEntityUpdates();
+      } else {
+        // If we're not the host, stop sending game entity updates
+        this.stopSendingGameEntityUpdates();
+      }
+    });
+
+    // Game state update (gorilla, bots positions, etc.)
+    this.socket.on("gameStateUpdate", (gameState) => {
+      // Skip if we're the host since we're the one sending these updates
+      if (this.isHost) return;
+
+      // Update gorilla and bots based on received data
+      this.updateLocalGameEntities(gameState);
+    });
+
+    // Game reset
+    this.socket.on("resetGame", () => {
+      debugLog("Game reset requested by server");
+      if (this.gameRef) {
+        this.gameRef.restart();
+      }
+    });
+
+    // Game started
+    this.socket.on("gameStarted", (gameData) => {
+      debugLog("Game started event received", "success");
+
+      // We're now in a game
+      this.inGame = true;
+
+      // Join the game
+      this.joinGame();
+    });
+
+    // Chat messages
+    this.socket.on("chatMessage", (messageData) => {
+      // Display message in the UI
+      if (window.showMessage) {
+        // Use sender's name if not from the system
+        const senderPrefix = messageData.sender
+          ? `${messageData.sender}: `
+          : "";
+        window.showMessage(
+          `${senderPrefix}${messageData.message}`,
+          messageData.sender ? "yellow" : "green"
+        );
+      }
     });
   }
 

@@ -8,6 +8,7 @@ import { SoundManager } from "./utils/SoundManager.js";
 import { HealthBar } from "./ui/HealthBar.js";
 import { ModelLoader } from "./utils/ModelLoader.js";
 import { MultiplayerManager } from "./multiplayer/MultiplayerManager.js";
+import { LobbyManager } from "./ui/LobbyManager.js";
 
 // Debug helper function
 function displayDebugInfo(enabled = true) {
@@ -44,7 +45,7 @@ function displayDebugInfo(enabled = true) {
 }
 
 // Show message in chat/notification area
-function showMessage(message, color = "white", duration = 5000) {
+export function showMessage(message, color = "white", duration = 5000) {
   // Create message container if not exists
   let messageContainer = document.getElementById("message-container");
   if (!messageContainer) {
@@ -141,6 +142,14 @@ class Game {
     this.healthBar = new HealthBar();
     this.healthBar.onRestart(() => this.restart());
 
+    // Create lobby manager
+    this.lobbyManager = new LobbyManager();
+
+    // Register callbacks for when a game is joined/created
+    this.lobbyManager.onJoinGame((lobbyData) => {
+      this.onGameJoined(lobbyData);
+    });
+
     // Create game entities
     this.environment = new Environment(this.scene);
 
@@ -162,6 +171,9 @@ class Game {
       this.modelLoader,
       this.soundManager
     );
+
+    // Set lobby manager in multiplayer
+    this.multiplayer.setLobbyManager(this.lobbyManager);
 
     // Provide reference to the game instance
     this.multiplayer.setGameReference(this);
@@ -243,6 +255,15 @@ class Game {
     };
 
     registerEvents();
+  }
+
+  // Handle game joined event
+  onGameJoined(gameData) {
+    // Hide start menu
+    const startMenu = document.getElementById("start-menu");
+    if (startMenu) {
+      startMenu.style.display = "none";
+    }
   }
 
   setupLighting() {
@@ -561,7 +582,17 @@ class Game {
     usernameInput.type = "text";
     usernameInput.id = "username-input";
     usernameInput.placeholder = "Enter your username";
-    usernameInput.value = "Player" + Math.floor(Math.random() * 1000);
+
+    // Try to get saved name
+    let savedName;
+    try {
+      savedName = localStorage.getItem("playerName");
+    } catch (e) {
+      console.error("Could not load player name from localStorage:", e);
+    }
+
+    usernameInput.value =
+      savedName || "Player" + Math.floor(Math.random() * 1000);
     usernameInput.style.width = "100%";
     usernameInput.style.padding = "10px";
     usernameInput.style.fontSize = "16px";
@@ -740,6 +771,13 @@ class Game {
       return;
     }
 
+    // Save username to localStorage
+    try {
+      localStorage.setItem("playerName", username);
+    } catch (e) {
+      console.error("Could not save player name to localStorage:", e);
+    }
+
     // Update UI
     statusMessage.textContent = "Connecting to server...";
     connectButton.textContent = "Connecting...";
@@ -748,33 +786,21 @@ class Game {
 
     // Store the username for multiplayer
     this.playerName = username;
+    if (this.lobbyManager) {
+      this.lobbyManager.savePlayerName(username);
+    }
 
     // Connect to multiplayer server
     if (this.multiplayer && this.player) {
-      // Override the prompt in MultiplayerManager to use our value
-      const originalPrompt = window.prompt;
-      window.prompt = () => username;
-
-      // Connect to server
-      this.multiplayer.connect(this.player);
-
-      // Restore original prompt
-      window.prompt = originalPrompt;
+      // Connect to server using the lobby system
+      this.multiplayer.connect(this.player, true);
 
       // Add connection listener to detect when connected
       const checkConnection = setInterval(() => {
         if (this.multiplayer.isConnected) {
           clearInterval(checkConnection);
-          // Hide start menu when connected
-          const startMenu = document.getElementById("start-menu");
-          startMenu.style.display = "none";
 
-          // Show connected message
-          showMessage(
-            "Connected to multiplayer server! You are playing as " + username,
-            "#4CAF50",
-            5000
-          );
+          // We'll let the multiplayer manager and lobby manager handle what happens next
         }
       }, 500);
 
@@ -801,6 +827,9 @@ class Game {
     }
   }
 }
+
+// Make showMessage available globally for other modules
+window.showMessage = showMessage;
 
 // Wait for DOM to load before starting the game
 document.addEventListener("DOMContentLoaded", () => {
