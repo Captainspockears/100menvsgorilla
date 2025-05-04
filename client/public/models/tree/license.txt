@@ -1,0 +1,11 @@
+Model Information:
+* title:	Realistic Tree 2 Free
+* source:	https://sketchfab.com/3d-models/realistic-tree-2-free-2cd58e603ae542c78dd9cada46496921
+* author:	Next Spring (https://sketchfab.com/NextSpring)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Realistic Tree 2 Free" (https://sketchfab.com/3d-models/realistic-tree-2-free-2cd58e603ae542c78dd9cada46496921) by Next Spring (https://sketchfab.com/NextSpring) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

@@ -136,7 +136,7 @@ class Game {
     });
 
     // Create game entities
-    this.environment = new Environment(this.scene);
+    this.environment = new Environment(this.scene, this.modelLoader);
 
     // Create player and gorilla with proper model loading
     this.loadGameEntities();

@@ -12,11 +12,16 @@ client/public/models/
 │   ├── human.bin      # Human binary data file
 │   ├── human.gltf     # Human model file
 │   └── license.txt    # License information for human model
-└── gorilla/           # Gorilla character model
-    ├── gorilla.bin    # Gorilla binary data file
-    ├── gorilla.gltf   # Gorilla model file
-    ├── textures/      # Textures for gorilla model
-    └── TGorilla_*.png # Texture files for gorilla
+├── gorilla/           # Gorilla character model
+│   ├── gorilla.bin    # Gorilla binary data file
+│   ├── gorilla.gltf   # Gorilla model file
+│   ├── textures/      # Textures for gorilla model
+│   └── TGorilla_*.png # Texture files for gorilla
+└── tree/              # Tree model for environment
+    ├── tree.bin       # Tree binary data file
+    ├── tree.gltf      # Tree model file
+    ├── license.txt    # License information for tree model
+    └── textures/      # Textures for tree model (if any)
 ```
 
 ## Model Usage in Code
@@ -25,8 +30,9 @@ The game uses these models as follows:
 
 - Human model: `/models/human/human.gltf` - Used for player characters
 - Gorilla model: `/models/gorilla/gorilla.gltf` - Used for the gorilla character
+- Tree model: `/models/tree/tree.gltf` - Used for environmental trees
 
-Models are loaded in the `Player.js` and `Gorilla.js` files via the `loadAnimatedModel` method from the `ModelLoader` class.
+Models are loaded in the `Player.js`, `Gorilla.js`, and `Environment.js` files via the `loadAnimatedModel` or `load` methods from the `ModelLoader` class.
 
 ## Testing Your Models
 
