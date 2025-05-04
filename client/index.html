@@ -83,6 +83,7 @@
             const socket = io("http://localhost:3000", {
               reconnection: false,
               timeout: 3000,
+              transports: ["websocket"], // Try WebSocket-only first
             });
 
             socket.on("connect", () => {
@@ -94,8 +95,30 @@
             });
 
             socket.on("connect_error", (error) => {
-              connectionDisplay.innerHTML = `Server status: Error connecting ❌<br>Error: ${error.message}`;
-              connectionDisplay.style.borderLeft = "4px solid #f44336";
+              // Don't immediately show error - try with polling too
+              console.log(
+                "WebSocket connection failed, trying polling as fallback"
+              );
+
+              // Try again with polling if WebSocket fails
+              const pollSocket = io("http://localhost:3000", {
+                reconnection: false,
+                timeout: 3000,
+                transports: ["polling"],
+              });
+
+              pollSocket.on("connect", () => {
+                connectionDisplay.innerHTML =
+                  "Server status: Connected ✅<br>Socket.IO ready (polling) ✅";
+                connectionDisplay.style.borderLeft = "4px solid #4CAF50";
+                pollSocket.disconnect();
+              });
+
+              pollSocket.on("connect_error", (pollError) => {
+                // Only now show the error if both transports fail
+                connectionDisplay.innerHTML = `Server status: Error connecting ❌<br>Error: ${pollError.message}`;
+                connectionDisplay.style.borderLeft = "4px solid #f44336";
+              });
             });
           } catch (error) {
             connectionDisplay.innerHTML = `Socket.IO error: ${error.message}`;

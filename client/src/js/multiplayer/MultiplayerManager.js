@@ -477,6 +477,13 @@ export class MultiplayerManager {
             this.joinGame();
           }
 
+          // Hide the initial connection display once we're connected through the game
+          const connectionDisplay =
+            document.getElementById("connection-display");
+          if (connectionDisplay) {
+            connectionDisplay.style.display = "none";
+          }
+
           // Resolve the promise
           resolve(socket);
         });
@@ -664,6 +671,12 @@ export class MultiplayerManager {
       );
       this.isConnected = true;
       this.showConnectionStatus("Connected to server!", "success");
+
+      // Hide the initial connection display once we're connected through the game
+      const connectionDisplay = document.getElementById("connection-display");
+      if (connectionDisplay) {
+        connectionDisplay.style.display = "none";
+      }
 
       // Update debug overlay
       this.updateDebugOverlay();
