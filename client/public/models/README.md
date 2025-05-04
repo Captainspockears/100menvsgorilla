@@ -8,29 +8,25 @@ The models directory is organized as follows:
 
 ```
 client/public/models/
-├── human/             # Original human model (fallback)
-├── gorilla/           # Original gorilla model (fallback)
-├── new-human/         # Directory for new animated human model
-│   └── character.glb  # Main human model file with animations
-└── new-gorilla/       # Directory for new animated gorilla model
-    └── character.glb  # Main gorilla model file with animations
+├── human/             # Human character model
+│   ├── human.bin      # Human binary data file
+│   ├── human.gltf     # Human model file
+│   └── license.txt    # License information for human model
+└── gorilla/           # Gorilla character model
+    ├── gorilla.bin    # Gorilla binary data file
+    ├── gorilla.gltf   # Gorilla model file
+    ├── textures/      # Textures for gorilla model
+    └── TGorilla_*.png # Texture files for gorilla
 ```
 
-## Getting Animated Models
+## Model Usage in Code
 
-### For the Human Character
+The game uses these models as follows:
 
-Follow the instructions in `new-human/README.md` to:
-1. Download a character from Mixamo
-2. Get the required animations (idle, walk, run, jump, attack, death)
-3. Combine them into a single `character.glb` file
+- Human model: `/models/human/human.gltf` - Used for player characters
+- Gorilla model: `/models/gorilla/gorilla.gltf` - Used for the gorilla character
 
-### For the Gorilla Character
-
-Follow the instructions in `new-gorilla/README.md` to:
-1. Find a suitable gorilla model from the recommended sources
-2. Ensure it has the required animations
-3. Convert and save it as `character.glb`
+Models are loaded in the `Player.js` and `Gorilla.js` files via the `loadAnimatedModel` method from the `ModelLoader` class.
 
 ## Testing Your Models
 

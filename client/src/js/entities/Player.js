@@ -77,8 +77,8 @@ export class Player {
 
       // Define path to the model based on player type
       const modelPath = this.isGorilla
-        ? "/models/gorilla/scene.gltf" // Gorilla model
-        : "/models/human/scene.gltf"; // Human model
+        ? "/models/gorilla/gorilla.gltf" // Gorilla model
+        : "/models/human/human.gltf"; // Human model
 
       console.log(
         `Using model path: ${modelPath} (isGorilla: ${this.isGorilla})`
@@ -708,7 +708,7 @@ export class Player {
 
     try {
       // Load the gorilla model - using only the main gorilla model path
-      const modelPath = "/models/gorilla/scene.gltf";
+      const modelPath = "/models/gorilla/gorilla.gltf";
 
       // Load the gorilla model
       const result = await modelLoader.loadAnimatedModel(modelPath, {

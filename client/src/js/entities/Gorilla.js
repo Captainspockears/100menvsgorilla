@@ -67,7 +67,7 @@ export class Gorilla {
     try {
       // Load the gorilla model
       const result = await modelLoader.loadAnimatedModel(
-        "/models/gorilla/scene.gltf",
+        "/models/gorilla/gorilla.gltf",
         {
           scale: 0.02, // Much smaller scale for this model based on its dimensions
           castShadow: true,
