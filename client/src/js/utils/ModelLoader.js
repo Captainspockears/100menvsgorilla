@@ -105,6 +105,24 @@ export class ModelLoader {
     // Apply scale
     model.scale.set(options.scale, options.scale, options.scale);
 
+    // Apply position if provided
+    if (options.position) {
+      model.position.set(
+        options.position.x || 0,
+        options.position.y || 0,
+        options.position.z || 0
+      );
+    }
+
+    // Apply rotation if provided
+    if (options.rotation) {
+      model.rotation.set(
+        options.rotation.x || 0,
+        options.rotation.y || 0,
+        options.rotation.z || 0
+      );
+    }
+
     // Apply shadow settings and fix materials
     model.traverse((node) => {
       if (node.isMesh) {
@@ -190,86 +208,156 @@ export class ModelLoader {
   }
 
   /**
-   * Loads a simple animated model with basic capabilities
+   * Loads an animated model with all animations
    * @param {string} path - Path to the model
    * @param {Object} options - Options for loading
    * @returns {Promise<{model: THREE.Group, mixer: THREE.AnimationMixer, animations: Object}>}
    */
   async loadAnimatedModel(path, options = {}) {
-    // Get the base path for textures
-    const basePath = path.substring(0, path.lastIndexOf("/") + 1);
+    // Default options
+    const defaultOptions = {
+      scale: 1,
+      castShadow: true,
+      receiveShadow: true,
+      position: { x: 0, y: 0, z: 0 },
+      rotation: { x: 0, y: 0, z: 0 },
+    };
 
-    // Create a resource manager to handle texture loading
-    const manager = new THREE.LoadingManager();
-    manager.setURLModifier((url) => {
-      // If the URL is relative (doesn't start with http or /), prepend the base path
-      if (
-        !url.startsWith("http") &&
-        !url.startsWith("/") &&
-        !url.startsWith("blob:")
-      ) {
-        return basePath + url;
-      }
-      return url;
-    });
+    const finalOptions = { ...defaultOptions, ...options };
 
-    // Create loader with the manager
-    const loader = new GLTFLoader(manager);
+    console.log(`Loading animated model from ${path}...`, finalOptions);
 
-    return new Promise((resolve, reject) => {
-      loader.load(
-        path,
-        (gltf) => {
-          const model = gltf.scene;
+    try {
+      // Get the base path for textures
+      const basePath = path.substring(0, path.lastIndexOf("/") + 1);
 
-          // Check if model is completely empty or has no visible geometry
-          let hasMeshes = false;
-          model.traverse((node) => {
-            if (node.isMesh) hasMeshes = true;
-          });
+      // Create a resource manager to handle texture loading
+      const manager = new THREE.LoadingManager();
 
-          if (!hasMeshes) {
-            console.warn(`Model at ${path} loaded but contains no meshes`);
-          }
+      // Log loading errors
+      manager.onError = (url) => {
+        console.error(`Error loading resource: ${url}`);
+      };
 
-          // Process model with options
-          this.processModel(model, options);
-
-          // Setup animation mixer
-          const mixer = new THREE.AnimationMixer(model);
-          const animations = {};
-
-          // Map all animations
-          if (gltf.animations && gltf.animations.length > 0) {
-            gltf.animations.forEach((clip) => {
-              animations[clip.name] = mixer.clipAction(clip);
-            });
-            console.log("Animations loaded:", Object.keys(animations));
-          } else {
-            console.log("No animations found in model");
-          }
-
-          console.log("Model loaded successfully:", path);
-
-          resolve({
-            model,
-            mixer,
-            animations,
-            animationClips: gltf.animations || [],
-          });
-        },
-        (xhr) => {
-          // Loading progress
-          console.log(
-            `${path}: ${Math.round((xhr.loaded / xhr.total) * 100)}% loaded`
-          );
-        },
-        (error) => {
-          // Error loading model
-          console.error(`Error loading model ${path}:`, error);
-          reject(error);
+      // Log progress
+      manager.onProgress = (url, loaded, total) => {
+        if (total > 0) {
+          console.log(`Loading ${url}: ${Math.round((loaded / total) * 100)}%`);
         }
+      };
+
+      manager.setURLModifier((url) => {
+        // If the URL is relative (doesn't start with http or /), prepend the base path
+        if (
+          !url.startsWith("http") &&
+          !url.startsWith("/") &&
+          !url.startsWith("blob:")
+        ) {
+          return basePath + url;
+        }
+        return url;
+      });
+
+      // Create loader with the manager
+      const loader = new GLTFLoader(manager);
+
+      // Try to load from a different path if this fails
+      return new Promise((resolve, reject) => {
+        const tryLoad = (currentPath, isRetry = false) => {
+          console.log(
+            `${
+              isRetry ? "Retrying" : "Attempting"
+            } to load model from: ${currentPath}`
+          );
+
+          loader.load(
+            currentPath,
+            (gltf) => {
+              // Successfully loaded the model
+              console.log(
+                `Model loaded successfully from ${currentPath}`,
+                gltf
+              );
+
+              const model = gltf.scene;
+
+              // Process the model with the provided options
+              this.processModel(model, finalOptions);
+
+              // Check if model has any children (meshes)
+              if (model.children.length === 0) {
+                console.warn("Loaded model has no children/meshes!");
+              } else {
+                console.log(`Model has ${model.children.length} children`);
+              }
+
+              // Create a new animation mixer for the model
+              const mixer = new THREE.AnimationMixer(model);
+
+              // Process animations
+              const animations = {};
+
+              if (gltf.animations && gltf.animations.length > 0) {
+                console.log(`Model has ${gltf.animations.length} animations`);
+
+                gltf.animations.forEach((clip) => {
+                  // Create an animation action for this clip
+                  const action = mixer.clipAction(clip);
+
+                  // Store the action by name for easy access
+                  animations[clip.name] = action;
+
+                  console.log(
+                    `Added animation: ${clip.name}, duration: ${clip.duration}s`
+                  );
+                });
+              } else {
+                console.warn("Model has no animations");
+              }
+
+              // Return model, mixer, and animations
+              resolve({
+                model,
+                mixer,
+                animations,
+              });
+            },
+            (xhr) => {
+              // Loading progress
+              if (xhr.lengthComputable) {
+                const percent = Math.round((xhr.loaded / xhr.total) * 100);
+                console.log(`Loading ${currentPath}: ${percent}%`);
+              }
+            },
+            (error) => {
+              // Error loading model
+              console.error(`Error loading model ${currentPath}:`, error);
+
+              // If this is the first attempt, try the fallback path
+              if (!isRetry) {
+                const fallbackPath = `/models/${
+                  currentPath.includes("gorilla") ? "gorilla" : "human"
+                }/scene2.gltf`;
+                console.warn(`Trying fallback model path: ${fallbackPath}`);
+                tryLoad(fallbackPath, true);
+              } else {
+                // Both attempts failed
+                console.error("All model loading attempts failed");
+                reject(error);
+              }
+            }
+          );
+        };
+
+        // Start with the original path
+        tryLoad(path);
+      });
+    } catch (error) {
+      console.error(
+        `Exception during model loading setup: ${error.message}`,
+        error
       );
-    });
+      throw error;
+    }
   }
 }

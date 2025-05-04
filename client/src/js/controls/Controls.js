@@ -9,13 +9,14 @@ export class Controls {
       left: false,
       right: false,
       jump: false,
+      attack: false,
     };
 
     // For smoother movement and rotation
     this.currentMoveVector = new THREE.Vector3(0, 0, 0);
     this.currentRotation = 0;
-    this.rotationSmoothness = 0.15; // Lower = smoother rotation
-    this.movementSmoothness = 0.2; // Lower = smoother movement
+    this.rotationSmoothness = 0.25; // Increased for faster rotation response (was 0.15)
+    this.movementSmoothness = 0.25; // Increased for faster movement response (was 0.2)
 
     // Set up event listeners
     document.addEventListener("keydown", this.onKeyDown.bind(this));
@@ -40,6 +41,11 @@ export class Controls {
           this.keys.jump = true;
         }
         break;
+      case "j":
+        // Trigger attack
+        console.log("J key pressed - attack triggered");
+        this.keys.attack = true;
+        break;
     }
   }
 
@@ -58,6 +64,9 @@ export class Controls {
       case " ":
         this.keys.jump = false;
         break;
+      case "j":
+        this.keys.attack = false;
+        break;
     }
   }
 
@@ -71,53 +80,71 @@ export class Controls {
     cameraDirection.normalize();
 
     // Get right vector (perpendicular to camera direction)
-    const cameraRight = new THREE.Vector3(1, 0, 0);
-    cameraRight.applyAxisAngle(
-      new THREE.Vector3(0, 1, 0),
-      Math.atan2(cameraDirection.x, cameraDirection.z)
-    );
+    const cameraRight = new THREE.Vector3();
+    cameraRight
+      .crossVectors(new THREE.Vector3(0, 1, 0), cameraDirection)
+      .normalize();
 
     // Initialize movement vector
     const moveVector = new THREE.Vector3(0, 0, 0);
 
-    // Apply movement based on keys pressed
+    // Determine if we're turning
+    let isTurningLeft = this.keys.left && !this.keys.right;
+    let isTurningRight = this.keys.right && !this.keys.left;
+
+    // Update rotation based on turning input
+    // Note: In THREE.js, rotation is clockwise for negative values and counter-clockwise for positive
+    if (isTurningLeft) {
+      // A key - turn left (counter-clockwise = positive)
+      this.currentRotation += 0.05;
+    } else if (isTurningRight) {
+      // D key - turn right (clockwise = negative)
+      this.currentRotation -= 0.05;
+    }
+
+    // Apply rotation to player regardless of movement
+    this.player.setRotation(this.currentRotation);
+
+    // Calculate forward direction based on current rotation
+    const playerForward = new THREE.Vector3(
+      Math.sin(this.currentRotation),
+      0,
+      Math.cos(this.currentRotation)
+    );
+
+    // When pressing forward, move in the player's facing direction
     if (this.keys.forward) {
-      // Move in the direction the camera is facing
-      moveVector.add(cameraDirection);
+      moveVector.add(playerForward);
     }
-    if (this.keys.left) {
-      // Move to the left of the camera (swapped)
-      moveVector.add(cameraRight);
+
+    // When pressing only left (no forward), strafe left
+    if (this.keys.left && !this.keys.forward && !this.keys.right) {
+      // Calculate right vector based on player orientation
+      const playerRight = new THREE.Vector3();
+      playerRight
+        .crossVectors(new THREE.Vector3(0, 1, 0), playerForward)
+        .normalize();
+      moveVector.sub(playerRight);
     }
-    if (this.keys.right) {
-      // Move to the right of the camera (swapped)
-      moveVector.sub(cameraRight);
+
+    // When pressing only right (no forward), strafe right
+    if (this.keys.right && !this.keys.forward && !this.keys.left) {
+      // Calculate right vector based on player orientation
+      const playerRight = new THREE.Vector3();
+      playerRight
+        .crossVectors(new THREE.Vector3(0, 1, 0), playerForward)
+        .normalize();
+      moveVector.add(playerRight);
     }
 
     // Normalize movement vector if length > 0
     if (moveVector.length() > 0) {
       moveVector.normalize();
-
-      // Smooth movement
-      this.currentMoveVector.lerp(moveVector, this.movementSmoothness);
-
-      // Set player rotation to face movement direction with smoothing
-      const targetRotation = Math.atan2(
-        this.currentMoveVector.x,
-        this.currentMoveVector.z
-      );
-      this.currentRotation = this.lerpAngle(
-        this.currentRotation,
-        targetRotation,
-        this.rotationSmoothness
-      );
-      this.player.setRotation(this.currentRotation);
+      // Apply the calculated movement vector
+      this.currentMoveVector.copy(moveVector);
     } else {
-      // Gradually slow down movement when no keys are pressed
-      this.currentMoveVector.multiplyScalar(0.8);
-      if (this.currentMoveVector.length() < 0.01) {
-        this.currentMoveVector.set(0, 0, 0);
-      }
+      // Stop movement immediately when no keys are pressed
+      this.currentMoveVector.set(0, 0, 0);
     }
 
     // Apply movement to player
@@ -132,6 +159,26 @@ export class Controls {
       this.player.jump();
       this.keys.jump = false; // Reset to prevent continuous jumping
     }
+
+    // Handle attacking
+    if (this.keys.attack) {
+      console.log("Attack key detected in update loop");
+      // Get potential targets from the game
+      const targets = this.getTargets();
+      console.log("Potential targets:", targets.length);
+      const result = this.player.attack(targets);
+      console.log("Attack function called, result:", result);
+      this.keys.attack = false; // Reset to prevent continuous attacking
+    }
+  }
+
+  // Helper to get potential targets for the attack
+  getTargets() {
+    // If we have a reference to the game instance, get all players
+    if (this.game && this.game.multiplayer) {
+      return this.game.multiplayer.getOtherPlayers();
+    }
+    return [];
   }
 
   // Helper for smooth angle interpolation

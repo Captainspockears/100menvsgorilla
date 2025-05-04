@@ -47,7 +47,7 @@ export class Environment {
   createMapBoundary() {
     // Create a visible boundary to show players the game area limits
     const boundaryMaterial = new THREE.LineBasicMaterial({
-      color: 0xff0000,
+      color: 0x666666, // Subtle gray instead of bright red
       linewidth: 2,
     });
 
@@ -73,7 +73,7 @@ export class Environment {
 
   createBoundaryPost(x, z) {
     const postGeometry = new THREE.CylinderGeometry(0.2, 0.2, 3, 8);
-    const postMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+    const postMaterial = new THREE.MeshBasicMaterial({ color: 0x666666 }); // Subtle gray
     const post = new THREE.Mesh(postGeometry, postMaterial);
     post.position.set(x, 1.5, z);
     this.scene.add(post);

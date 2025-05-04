@@ -14,6 +14,10 @@ export class SoundManager {
 
     // Generate sounds
     const attackSoundUrl = this.soundGenerator.generateAttackSound();
+    const humanAttackSoundUrl = this.soundGenerator.generateHumanAttackSound();
+    const gorillaAttackSoundUrl =
+      this.soundGenerator.generateGorillaAttackSound();
+    const gorillaRoarSoundUrl = this.soundGenerator.generateGorillaRoarSound();
     const damageSoundUrl = this.soundGenerator.generateDamageSound();
     const deathSoundUrl = this.soundGenerator.generateDeathSound();
     const jumpSoundUrl = this.soundGenerator.generateJumpSound();
@@ -24,6 +28,18 @@ export class SoundManager {
       attack: new Howl({
         src: [attackSoundUrl],
         volume: 0.5,
+      }),
+      humanAttack: new Howl({
+        src: [humanAttackSoundUrl],
+        volume: 0.5,
+      }),
+      gorillaAttack: new Howl({
+        src: [gorillaAttackSoundUrl],
+        volume: 0.6,
+      }),
+      gorillaRoar: new Howl({
+        src: [gorillaRoarSoundUrl],
+        volume: 0.7,
       }),
       damage: new Howl({
         src: [damageSoundUrl],

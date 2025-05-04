@@ -202,20 +202,9 @@ const playerLobbyMap = {};
 // Define initial positions of entities
 const INITIAL_POSITIONS = {
   gorilla: { x: 10, y: 0, z: 10 },
-  bots: Array(10)
-    .fill()
-    .map((_, i) => {
-      const angle = (i / 10) * Math.PI * 2;
-      const distance = 5 + Math.random() * 5;
-      return {
-        x: Math.cos(angle) * distance,
-        y: 0,
-        z: Math.sin(angle) * distance,
-      };
-    }),
 };
 
-// Store game entities (gorilla and bots)
+// Store game entities (just the gorilla now - will be assigned to a player)
 const gameEntities = {
   gorilla: {
     position: INITIAL_POSITIONS.gorilla,
@@ -223,14 +212,8 @@ const gameEntities = {
     health: 200,
     maxHealth: 200,
     isDead: false,
+    playerId: null, // Will store the ID of the player assigned as gorilla
   },
-  bots: INITIAL_POSITIONS.bots.map((pos) => ({
-    position: pos,
-    rotation: { y: 0 },
-    health: 50,
-    maxHealth: 50,
-    isDead: false,
-  })),
 };
 
 // Define map boundaries to keep players within a reasonable area
@@ -649,10 +632,11 @@ mainNamespace.on("connection", (socket) => {
     }
 
     // Check if there are enough players
-    if (lobby.players.length < 1) {
+    if (lobby.players.length < 2) {
+      // Changed from 1 to 2 since we need at least 2 players (1 gorilla, 1 human)
       serverLog(`Not enough players in lobby ${lobbyId} to start game`, "warn");
       socket.emit("lobbyError", {
-        message: "Need at least 1 player to start the game.",
+        message: "Need at least 2 players to start the game.",
       });
       return;
     }
@@ -663,25 +647,56 @@ mainNamespace.on("connection", (socket) => {
     // Add to active games
     activeGames.add(lobbyId);
 
-    // Emit game started event to all players in the lobby
+    // Randomly select one player to be the gorilla
+    const playerIndices = lobby.players.map((_, index) => index);
+    const randomIndex = Math.floor(Math.random() * playerIndices.length);
+    const gorillaPlayerIndex = playerIndices[randomIndex];
+    const gorillaPlayer = lobby.players[gorillaPlayerIndex];
+
+    // Store the gorilla player ID in gameEntities
+    gameEntities.gorilla.playerId = gorillaPlayer.id;
+
+    // Create roles array to send to clients
+    const playerRoles = lobby.players.map((player, index) => ({
+      id: player.id,
+      name: player.name,
+      isGorilla: index === gorillaPlayerIndex,
+    }));
+
+    // Emit game started event to all players in the lobby with role assignments
     serverLog(
-      `Emitting gameStarted event to all players in lobby ${lobbyId}`,
+      `Emitting gameStarted event to all players in lobby ${lobbyId}. Gorilla: ${gorillaPlayer.name}`,
       "info"
     );
+
     io.to(lobbyId).emit("gameStarted", {
       lobbyId,
       players: lobby.players,
+      roles: playerRoles,
+      gorilla: {
+        id: gorillaPlayer.id,
+        name: gorillaPlayer.name,
+      },
     });
 
     // Broadcast updated lobbies list (to remove this lobby from available ones)
     broadcastLobbiesList();
 
-    serverLog(`Game started in lobby: ${lobby.name} (${lobbyId})`, "success");
+    serverLog(
+      `Game started in lobby: ${lobby.name} (${lobbyId}). Gorilla: ${gorillaPlayer.name}`,
+      "success"
+    );
   });
 
   // Handle join event
   socket.on("join", (data) => {
-    serverLog(`Player ${socket.id} joining game as ${data.name}`, "info", data);
+    serverLog(
+      `Player ${socket.id} joining game as ${data.name} ${
+        data.isGorilla ? "(Gorilla)" : "(Human)"
+      }`,
+      "info",
+      data
+    );
 
     // Create player data
     players[socket.id] = {
@@ -690,6 +705,7 @@ mainNamespace.on("connection", (socket) => {
       position: data.position || { x: 0, y: 0, z: 0 },
       rotation: data.rotation || { y: 0 },
       color: randomColor(),
+      isGorilla: data.isGorilla || false, // Store gorilla state
     };
 
     // Assign host if needed
@@ -709,7 +725,14 @@ mainNamespace.on("connection", (socket) => {
     socket.broadcast.emit("playerJoined", players[socket.id]);
 
     // Debug
-    serverLog(`Total players now: ${Object.keys(players).length}`, "info");
+    serverLog(
+      `Total players now: ${Object.keys(players).length} (Gorilla: ${
+        gameEntities.gorilla.playerId
+          ? gameEntities.gorilla.playerId
+          : "None yet"
+      })`,
+      "info"
+    );
   });
 
   // Handle position update
@@ -735,6 +758,26 @@ mainNamespace.on("connection", (socket) => {
 
     // Broadcast to all clients except host
     socket.broadcast.emit("gameStateUpdate", gameState);
+  });
+
+  // Handle player attack
+  socket.on("playerAttack", (attackData) => {
+    if (!players[socket.id]) return;
+
+    serverLog(
+      `Player ${socket.id} (${players[socket.id].name}) attacked`,
+      "info",
+      attackData
+    );
+
+    // Add player info to attack data
+    const fullAttackData = {
+      ...attackData,
+      name: players[socket.id].name,
+    };
+
+    // Broadcast attack to all other players
+    socket.broadcast.emit("playerAttacked", fullAttackData);
   });
 
   // Handle chat messages

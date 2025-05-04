@@ -3,7 +3,6 @@ import * as THREE from "three";
 
 import { Player } from "../entities/Player.js";
 import { Gorilla } from "../entities/Gorilla.js";
-import { Bot } from "../entities/Bot.js";
 
 // DEBUG HELPERS
 function debugLog(message, type = "info") {
@@ -188,19 +187,22 @@ export class MultiplayerManager {
     this.modelLoader = modelLoader;
     this.soundManager = soundManager;
     this.updateInterval = null;
+    this.gameEntityUpdateInterval = null; // Renamed for consistency
     this.playerName = "Player"; // Default name
     this.isHost = false; // Will be set to true if this client is the host
+    this.isGorilla = false; // Will be set to true if this client is the gorilla
     this.gameRef = null; // Reference to main game instance
     this.isConnected = false; // Track connection state
     this.connectionAttempts = 0;
     this.maxConnectionAttempts = 5;
     this.inGame = false; // Track if player is currently in a game
     this.lobbyManager = null; // Reference to the lobby manager
+    this.gorillaPlayerId = null; // Store the ID of the player who is the gorilla
 
     // Debug helpers
-    this.debugEnabled = true;
-    this.showDebugObjects = false; // Disable debug objects to hide the blue spheres at player feet
-    this.debugObjects = []; // Store debug objects
+    this.debugEnabled = false;
+    this.showDebugObjects = false;
+    this.debugObjects = [];
 
     // Create debug text on screen
     this.createDebugOverlay();
@@ -230,23 +232,24 @@ export class MultiplayerManager {
 
   // Create on-screen debug text overlay for multiplayer info
   createDebugOverlay() {
-    this.debugOverlay = document.createElement("div");
-    this.debugOverlay.style.position = "absolute";
-    this.debugOverlay.style.bottom = "10px";
-    this.debugOverlay.style.right = "10px";
-    this.debugOverlay.style.backgroundColor = "rgba(0, 0, 0, 0.7)";
-    this.debugOverlay.style.color = "white";
-    this.debugOverlay.style.padding = "10px";
-    this.debugOverlay.style.fontFamily = "monospace";
-    this.debugOverlay.style.fontSize = "12px";
-    this.debugOverlay.style.maxWidth = "400px";
-    this.debugOverlay.style.maxHeight = "200px";
-    this.debugOverlay.style.overflow = "auto";
-    this.debugOverlay.style.zIndex = "1000";
-    this.debugOverlay.style.borderRadius = "5px";
-    this.debugOverlay.id = "multiplayer-debug";
-    this.debugOverlay.innerHTML = "Multiplayer: Disconnected";
-    document.body.appendChild(this.debugOverlay);
+    if (!this.debugOverlay) {
+      this.debugOverlay = document.createElement("div");
+      this.debugOverlay.id = "multiplayer-debug";
+      this.debugOverlay.style.position = "fixed";
+      this.debugOverlay.style.top = "10px";
+      this.debugOverlay.style.right = "10px";
+      this.debugOverlay.style.backgroundColor = "rgba(0, 0, 0, 0.7)";
+      this.debugOverlay.style.color = "white";
+      this.debugOverlay.style.padding = "10px";
+      this.debugOverlay.style.fontFamily = "monospace";
+      this.debugOverlay.style.fontSize = "12px";
+      this.debugOverlay.style.maxWidth = "400px";
+      this.debugOverlay.style.maxHeight = "200px";
+      this.debugOverlay.style.overflow = "auto";
+      this.debugOverlay.style.zIndex = "1000";
+      this.debugOverlay.style.borderRadius = "5px";
+      document.body.appendChild(this.debugOverlay);
+    }
   }
 
   // Show connection status message in UI
@@ -337,21 +340,13 @@ export class MultiplayerManager {
 
   // Add debug sphere at position
   addDebugSphere(position, color = 0xff0000, size = 0.5) {
-    if (!this.showDebugObjects) return;
-
-    const geometry = new THREE.SphereGeometry(size, 8, 8);
-    const material = new THREE.MeshBasicMaterial({ color });
-    const sphere = new THREE.Mesh(geometry, material);
-    sphere.position.copy(position);
-    this.scene.add(sphere);
-    this.debugObjects.push(sphere);
-    return sphere;
+    // Debug spheres disabled to keep visuals clean
+    return null; // Return null instead of creating a sphere
   }
 
   debug(message) {
-    if (this.debugEnabled) {
-      debugLog(message);
-    }
+    if (!this.debugEnabled) return;
+    console.log(`[MP] ${message}`);
   }
 
   // Set game reference to access game entities
@@ -557,7 +552,11 @@ export class MultiplayerManager {
       return;
     }
 
-    debugLog(`Joining game as ${this.playerName}`);
+    debugLog(
+      `Joining game as ${this.playerName} ${
+        this.isGorilla ? "(Gorilla)" : "(Human)"
+      }`
+    );
     this.inGame = true;
 
     try {
@@ -591,12 +590,16 @@ export class MultiplayerManager {
       debugLog(
         `Sending join with position: ${JSON.stringify(
           playerPosition
-        )} and rotation: ${JSON.stringify(playerRotation)}`
+        )}, rotation: ${JSON.stringify(playerRotation)}, isGorilla: ${
+          this.isGorilla
+        }`
       );
+
       this.socket.emit("join", {
         name: this.playerName,
         position: playerPosition,
         rotation: playerRotation,
+        isGorilla: this.isGorilla, // Add this information for other clients
       });
     } catch (error) {
       debugLog(`Error sending join: ${error.message}`, "error");
@@ -606,6 +609,7 @@ export class MultiplayerManager {
         name: this.playerName,
         position: { x: 0, y: 0, z: 0 },
         rotation: { y: 0 },
+        isGorilla: this.isGorilla,
       });
     }
 
@@ -788,23 +792,31 @@ export class MultiplayerManager {
     this.socket.on("existingPlayers", (playersData) => {
       debugLog(`Received ${playersData.length} existing players`);
       playersData.forEach((playerData) => {
+        // If this player is the gorilla, mark them
+        const isGorilla = playerData.id === this.gorillaPlayerId;
+        if (isGorilla) {
+          debugLog(`Existing player ${playerData.id} is the gorilla!`, "info");
+          playerData.isGorilla = true;
+        }
+        // Add the player if they don't exist yet
         this.addRemotePlayer(playerData);
       });
     });
 
     // New player joined
     this.socket.on("playerJoined", (playerData) => {
-      debugLog(`New player joined: ${playerData.name} (${playerData.id})`);
-      this.addRemotePlayer(playerData);
-
-      // Trigger callback if defined
-      if (this.onPlayerJoined) {
-        this.onPlayerJoined(playerData);
+      debugLog(`New player joined: ${playerData.id} (${playerData.name})`);
+      // If this player is the gorilla, mark them
+      if (playerData.id === this.gorillaPlayerId) {
+        debugLog(`This new player is the gorilla!`, "info");
+        playerData.isGorilla = true;
       }
+      this.addRemotePlayer(playerData);
     });
 
-    // Player movement update
+    // Player moved
     this.socket.on("playerMoved", (data) => {
+      // Update the player's position and rotation
       this.updateRemotePlayer(data);
     });
 
@@ -812,11 +824,18 @@ export class MultiplayerManager {
     this.socket.on("playerLeft", (playerId) => {
       debugLog(`Player left: ${playerId}`);
       this.removeRemotePlayer(playerId);
+    });
 
-      // Trigger callback if defined
-      if (this.onPlayerLeft) {
-        this.onPlayerLeft({ id: playerId });
-      }
+    // Game state update from host
+    this.socket.on("gameStateUpdate", (gameState) => {
+      debugLog("Received game state update from host");
+      this.updateLocalGameEntities(gameState);
+    });
+
+    // IMPORTANT: Add listener for player attack events
+    this.socket.on("playerAttacked", (attackData) => {
+      debugLog(`Received attack from ${attackData.id}`, "info", attackData);
+      this.handleRemotePlayerAttack(attackData);
     });
 
     // Host assignment
@@ -837,15 +856,6 @@ export class MultiplayerManager {
       }
     });
 
-    // Game state update (gorilla, bots positions, etc.)
-    this.socket.on("gameStateUpdate", (gameState) => {
-      // Skip if we're the host since we're the one sending these updates
-      if (this.isHost) return;
-
-      // Update gorilla and bots based on received data
-      this.updateLocalGameEntities(gameState);
-    });
-
     // Game reset
     this.socket.on("resetGame", () => {
       debugLog("Game reset requested by server");
@@ -855,15 +865,7 @@ export class MultiplayerManager {
     });
 
     // Game started
-    this.socket.on("gameStarted", (gameData) => {
-      debugLog("Game started event received", "success");
-
-      // We're now in a game
-      this.inGame = true;
-
-      // Join the game
-      this.joinGame();
-    });
+    this.setupGameStartedEvent();
 
     // Chat messages
     this.socket.on("chatMessage", (messageData) => {
@@ -916,96 +918,77 @@ export class MultiplayerManager {
       return;
     }
 
-    this.debug(`Adding remote player: ${playerData.id} (${playerData.name})`);
+    console.log(
+      `Adding remote player: ${playerData.id} (${playerData.name})`,
+      playerData
+    );
 
-    // Create a placeholder immediately visible
+    // CRITICAL FIX: Create a temporary but VERY VISIBLE placeholder
     const placeholderGroup = new THREE.Group();
     this.scene.add(placeholderGroup);
 
-    // Add HIGHLY VISIBLE placeholder for the player
-    // Create a taller box for better visibility
-    const cubeGeometry = new THREE.BoxGeometry(1.5, 3, 1.5);
+    // Add a subtle placeholder box
+    const cubeGeometry = new THREE.BoxGeometry(1, 2, 1);
     const cubeMaterial = new THREE.MeshBasicMaterial({
-      color: 0xff0000,
-      wireframe: false,
+      color: 0x0088ff, // Subtle blue
+      wireframe: true, // Just wireframe to be less intrusive
       transparent: true,
-      opacity: 0.8,
+      opacity: 0.5, // Semitransparent
     });
     const cube = new THREE.Mesh(cubeGeometry, cubeMaterial);
-    cube.position.set(0, 1.5, 0); // Move up to be more visible
+    cube.position.set(0, 1, 0); // Lower position
     placeholderGroup.add(cube);
 
-    // Add a vertical beam of light for extra visibility
-    const beamGeometry = new THREE.CylinderGeometry(0.1, 0.1, 50, 8);
-    const beamMaterial = new THREE.MeshBasicMaterial({
-      color: 0xffff00,
-      transparent: true,
-      opacity: 0.3,
-    });
-    const beam = new THREE.Mesh(beamGeometry, beamMaterial);
-    beam.position.set(0, 25, 0); // Position in the middle of the beam
-    placeholderGroup.add(beam);
+    // CRITICAL FIX: Set position explicitly, with console output for debugging
+    if (playerData.position) {
+      placeholderGroup.position.set(
+        playerData.position.x || 0,
+        playerData.position.y || 0,
+        playerData.position.z || 0
+      );
+      console.log(
+        `Remote player ${playerData.id} positioned at: (${placeholderGroup.position.x}, ${placeholderGroup.position.y}, ${placeholderGroup.position.z})`
+      );
+    } else {
+      console.warn(
+        `No position data for remote player ${playerData.id}, using (0,0,0)`
+      );
+      placeholderGroup.position.set(0, 0, 0);
+    }
 
-    // Add a flashing animation to make it more visible
-    const flashInterval = setInterval(() => {
-      if (cubeMaterial.opacity > 0.2) {
-        cubeMaterial.opacity = 0.2;
-      } else {
-        cubeMaterial.opacity = 0.8;
-      }
-    }, 500);
+    if (playerData.rotation) {
+      placeholderGroup.rotation.y = playerData.rotation.y;
+    }
 
-    // Position placeholder at the correct position
-    const position = playerData.position || { x: 0, y: 0, z: 0 };
-    placeholderGroup.position.set(position.x, position.y, position.z);
-    placeholderGroup.rotation.y = playerData.rotation?.y || 0;
-
-    // Log position with exact coordinates
-    this.debug(
-      `Remote player position: X:${position.x.toFixed(
-        4
-      )}, Y:${position.y.toFixed(4)}, Z:${position.z.toFixed(4)}`
+    // Create name label with more subtle text
+    const nameLabel = this.createNameLabel(
+      playerData.name || "Player",
+      0x0088ff // Subtle blue
     );
-
-    // Add name label above placeholder (make it larger and more visible)
-    const nameLabel = this.createNameLabel(playerData.name || "Unknown Player");
+    nameLabel.position.set(0, 2.5, 0);
+    nameLabel.scale.set(2, 1, 1); // Smaller scale
     placeholderGroup.add(nameLabel);
-    nameLabel.position.set(0, 4, 0); // Position higher up
-    nameLabel.scale.set(3, 1, 1); // Make it larger
 
-    // Generate player color
-    const playerColors = [
-      0xff0000, // red
-      0x00ff00, // green
-      0x0000ff, // blue
-      0xffff00, // yellow
-      0xff00ff, // magenta
-      0x00ffff, // cyan
-      0xff8000, // orange
-    ];
-    const colorIndex =
-      parseInt(playerData.id.substr(-3), 16) % playerColors.length;
-    const color = playerData.color || playerColors[colorIndex];
-    cube.material.color.setHex(color);
-    beam.material.color.setHex(color);
-
-    // Store remote player with placeholder
+    // Add to map
     this.remotePlayersMap.set(playerData.id, {
       id: playerData.id,
       player: {
         group: placeholderGroup,
-        position: placeholderGroup.position,
-        isMoving: false,
-        update: () => {}, // No-op update function
+        model: null,
       },
       nameLabel: nameLabel,
-      color: color,
+      color: 0x0088ff, // Subtle blue
       lastUpdate: Date.now(),
       isHost: playerData.isHost || false,
+      isGorilla: playerData.isGorilla || false,
+      name: playerData.name || "Player",
       isPlaceholder: true,
     });
 
-    this.updateDebugOverlay();
+    console.log(
+      `Added placeholder for remote player ${playerData.id} at position:`,
+      placeholderGroup.position
+    );
 
     // Start loading actual player model in the background
     this.loadRemotePlayerModel(playerData);
@@ -1014,6 +997,28 @@ export class MultiplayerManager {
   // Load remote player model asynchronously
   async loadRemotePlayerModel(playerData) {
     try {
+      console.log(
+        `Starting to load model for remote player ${playerData.id}`,
+        playerData
+      );
+
+      // CRITICAL FIX: Ensure we have the original position before creating a new player
+      // Get the original placeholder position
+      const currentData = this.remotePlayersMap.get(playerData.id);
+      if (!currentData || !currentData.player || !currentData.player.group) {
+        console.error(`Cannot find original player data for ${playerData.id}`);
+        return;
+      }
+
+      const originalPosition = currentData.player.group.position.clone();
+      const originalRotation = currentData.player.group.rotation.y;
+      console.log(`Original position for ${playerData.id}:`, originalPosition);
+
+      // Check if this player is the gorilla
+      const isGorilla =
+        playerData.isGorilla || playerData.id === this.gorillaPlayerId;
+      console.log(`Remote player ${playerData.id} isGorilla: ${isGorilla}`);
+
       // Create a new player instance for the remote player
       const remotePlayer = new Player(
         this.scene,
@@ -1021,79 +1026,136 @@ export class MultiplayerManager {
         this.modelLoader
       );
 
-      // Wait for model to load
+      // Set gorilla flag before loading the model to ensure correct positioning
+      if (isGorilla) {
+        remotePlayer.isGorilla = true;
+        console.log(`Set isGorilla flag for remote player ${playerData.id}`);
+      }
+
+      // CRITICAL FIX: Ensure the player group is added to the scene immediately
+      this.scene.add(remotePlayer.group);
+
+      // CRITICAL FIX: Set the position immediately
+      remotePlayer.group.position.copy(originalPosition);
+
+      // Update rotation, ensuring we use the correct orientation based on player type
+      // NOTE: For human player, the model needs to match the corrected orientation we set
+      remotePlayer.group.rotation.y = originalRotation;
+
+      console.log(
+        `Set remote player position to:`,
+        remotePlayer.group.position
+      );
+
+      // Wait for model to load with timeout
+      console.log(
+        `Waiting for model to load for remote player ${playerData.id}`
+      );
+      let modelLoaded = false;
       await new Promise((resolve) => {
+        const startTime = Date.now();
         const checkInterval = setInterval(() => {
+          // Check if player is still in the map
+          if (!this.remotePlayersMap.has(playerData.id)) {
+            console.log(
+              `Player ${playerData.id} left during model loading, aborting`
+            );
+            clearInterval(checkInterval);
+            resolve();
+            return;
+          }
+
+          // Check if model has loaded
           if (remotePlayer.model) {
-            this.debug(`Model loaded for ${playerData.id}`);
+            console.log(
+              `Model loaded successfully for ${playerData.id} after ${
+                (Date.now() - startTime) / 1000
+              }s`
+            );
+            clearInterval(checkInterval);
+            modelLoaded = true;
+            resolve();
+            return;
+          }
+
+          // Check for timeout (5 seconds)
+          if (Date.now() - startTime > 5000) {
+            console.warn(
+              `Timeout waiting for model to load for ${playerData.id}`
+            );
             clearInterval(checkInterval);
             resolve();
           }
         }, 500);
-
-        // Timeout after 10 seconds
-        setTimeout(() => {
-          clearInterval(checkInterval);
-          resolve();
-        }, 10000);
       });
 
-      // If player is no longer in the map, don't update
+      // CRITICAL FIX: Check if player is still in the map
       if (!this.remotePlayersMap.has(playerData.id)) {
-        this.debug(`Player ${playerData.id} left during model loading`);
+        console.log(
+          `Player ${playerData.id} left during model loading - removing remote player`
+        );
+        this.scene.remove(remotePlayer.group);
         return;
       }
 
-      const currentData = this.remotePlayersMap.get(playerData.id);
-
-      // Get the current position (may have been updated during loading)
-      const currentPosition = currentData.player.group.position.clone();
-      const currentRotation = currentData.player.group.rotation.y;
-
-      // Position the new model
-      remotePlayer.group.position.copy(currentPosition);
-      remotePlayer.group.rotation.y = currentRotation;
+      // CRITICAL FIX: Verify if the model loaded correctly
+      if (!modelLoaded || !remotePlayer.model) {
+        console.warn(
+          `Failed to load model for remote player ${playerData.id} - using enhanced placeholder`
+        );
+        // Keep the player with the placeholder
+      }
 
       // Add name label
-      const newNameLabel = this.createNameLabel(playerData.name);
+      const newNameLabel = this.createNameLabel(
+        playerData.name || currentData.name || "Player"
+      );
       remotePlayer.group.add(newNameLabel);
       newNameLabel.position.set(0, 4, 0); // Position higher up
-      newNameLabel.scale.set(3, 1, 1); // Make it larger
 
-      // Set color
-      this.setRemotePlayerColor(remotePlayer, {
-        id: playerData.id,
-        color: currentData.color,
-      });
+      // CRITICAL FIX: Use a distinct, bright color for remote players
+      this.colorRemotePlayer(remotePlayer, playerData.id);
 
-      // Add a beam of light above the player (for visibility even with model)
-      const beamGeometry = new THREE.CylinderGeometry(0.1, 0.1, 50, 8);
-      const beamMaterial = new THREE.MeshBasicMaterial({
-        color: currentData.color,
-        transparent: true,
-        opacity: 0.3,
-      });
-      const beam = new THREE.Mesh(beamGeometry, beamMaterial);
-      beam.position.set(0, 25, 0);
-      remotePlayer.group.add(beam);
-
-      // Remove placeholder
-      this.scene.remove(currentData.player.group);
-
-      // Update map entry
+      // Update map entry with the new player, retaining the original data
       this.remotePlayersMap.set(playerData.id, {
+        ...currentData,
         id: playerData.id,
         player: remotePlayer,
         nameLabel: newNameLabel,
-        color: currentData.color,
         lastUpdate: Date.now(),
-        isHost: playerData.isHost || false,
+        isGorilla: isGorilla,
         isPlaceholder: false,
+        transformedToGorilla: false,
       });
 
-      this.debug(`Remote player model replaced for ${playerData.id}`);
+      // Remove the placeholder after we've updated the map
+      // CRITICAL FIX: Only remove the placeholder after successfully replacing it
+      if (
+        modelLoaded &&
+        remotePlayer.model &&
+        currentData.player &&
+        currentData.player.group
+      ) {
+        console.log(`Removing placeholder for ${playerData.id}`);
+        this.scene.remove(currentData.player.group);
+      }
+
+      console.log(`Remote player model replaced for ${playerData.id}`);
+
+      // If this player is the gorilla, transform them
+      if (isGorilla) {
+        this.debug(
+          `Transforming remote player ${playerData.id} to gorilla (after model load)`
+        );
+        await this.transformRemotePlayerToGorilla(playerData.id);
+      }
+
       this.updateDebugOverlay();
+
+      // CRITICAL FIX: Add debug sphere to show exact position
+      this.addDebugSphere(remotePlayer.group.position, 0xff00ff, 0.5);
     } catch (error) {
+      console.error(`Error loading player model: ${error.message}`, error);
       this.debug(`Error loading player model: ${error.message}`);
     }
   }
@@ -1269,8 +1331,8 @@ export class MultiplayerManager {
     }
   }
 
-  // Create name label above player
-  createNameLabel(name) {
+  // Create name label above player with optional color
+  createNameLabel(name, colorHex = undefined) {
     // Create canvas for text
     const canvas = document.createElement("canvas");
     const context = canvas.getContext("2d");
@@ -1278,7 +1340,11 @@ export class MultiplayerManager {
     canvas.height = 64;
 
     // Draw background
-    context.fillStyle = "rgba(0, 0, 0, 0.7)";
+    context.fillStyle = colorHex
+      ? `rgba(${(colorHex >> 16) & 255}, ${(colorHex >> 8) & 255}, ${
+          colorHex & 255
+        }, 0.7)`
+      : "rgba(0, 0, 0, 0.7)";
     context.fillRect(0, 0, canvas.width, canvas.height);
 
     // Draw text
@@ -1302,132 +1368,33 @@ export class MultiplayerManager {
     // Do nothing - we're using the new setRemotePlayerColor method instead
   }
 
-  // Start sending game entity updates (only host does this)
+  // Start sending game entity updates (host only)
   startSendingGameEntityUpdates() {
-    if (!this.isHost || !this.gameRef) return;
+    if (!this.socket || !this.isHost) return;
 
-    // Send updates 5 times per second (less frequent than player position)
-    this.gameUpdateInterval = setInterval(() => {
-      if (this.socket && this.socket.connected && this.gameRef) {
-        // Collect entity data to send
-        const entityData = {
-          gorilla: this.collectGorillaData(),
-          bots: this.collectBotsData(),
-        };
+    this.debug("Starting to send game entity updates as host");
 
-        // Send to server
-        this.socket.emit("updateGameEntities", entityData);
-      }
-    }, 200); // 5 times per second
+    // No need to send gorilla and bot updates as they're now human-controlled
+    // Just clear the interval if it exists to prevent errors
+    if (this.gameEntityUpdateInterval) {
+      clearInterval(this.gameEntityUpdateInterval);
+      this.gameEntityUpdateInterval = null;
+    }
   }
 
   // Stop sending game entity updates
   stopSendingGameEntityUpdates() {
-    if (this.gameUpdateInterval) {
-      clearInterval(this.gameUpdateInterval);
-      this.gameUpdateInterval = null;
+    if (this.gameEntityUpdateInterval) {
+      clearInterval(this.gameEntityUpdateInterval);
+      this.gameEntityUpdateInterval = null;
     }
-  }
-
-  // Collect data about the gorilla to send
-  collectGorillaData() {
-    if (!this.gameRef || !this.gameRef.gorilla) return null;
-
-    const gorilla = this.gameRef.gorilla;
-    return {
-      position: {
-        x: gorilla.group.position.x,
-        y: gorilla.group.position.y,
-        z: gorilla.group.position.z,
-      },
-      rotation: {
-        y: gorilla.group.rotation.y,
-      },
-      health: gorilla.health,
-      maxHealth: gorilla.maxHealth,
-      isDead: gorilla.isDead,
-    };
-  }
-
-  // Collect data about bots to send
-  collectBotsData() {
-    if (!this.gameRef || !this.gameRef.bots) return [];
-
-    return this.gameRef.bots.map((bot) => ({
-      position: {
-        x: bot.mesh.position.x,
-        y: bot.mesh.position.y,
-        z: bot.mesh.position.z,
-      },
-      rotation: {
-        y: bot.mesh.rotation.y,
-      },
-      health: bot.health,
-      maxHealth: bot.maxHealth,
-      isDead: bot.isDead,
-    }));
   }
 
   // Update local game entities based on received data
   updateLocalGameEntities(gameState) {
-    if (!this.gameRef) return;
-
-    // Update gorilla
-    if (gameState.gorilla && this.gameRef.gorilla) {
-      const g = this.gameRef.gorilla;
-      const receivedG = gameState.gorilla;
-
-      // Update position and rotation
-      g.group.position.set(
-        receivedG.position.x,
-        receivedG.position.y,
-        receivedG.position.z
-      );
-      g.group.rotation.y = receivedG.rotation.y;
-
-      // Update health and state
-      g.health = receivedG.health;
-      g.maxHealth = receivedG.maxHealth;
-      g.isDead = receivedG.isDead;
-
-      // If gorilla is dead but our local version isn't showing as dead
-      if (g.isDead && !g.model.visible === false) {
-        g.die(); // Trigger death animation/state
-      }
-    }
-
-    // Update bots
-    if (gameState.bots && gameState.bots.length > 0 && this.gameRef.bots) {
-      // For simplicity, we just update positions of existing bots
-      const botsToUpdate = Math.min(
-        gameState.bots.length,
-        this.gameRef.bots.length
-      );
-
-      for (let i = 0; i < botsToUpdate; i++) {
-        const localBot = this.gameRef.bots[i];
-        const remoteBot = gameState.bots[i];
-
-        if (localBot && !localBot.isDead) {
-          // Update position and rotation
-          localBot.mesh.position.set(
-            remoteBot.position.x,
-            remoteBot.position.y,
-            remoteBot.position.z
-          );
-          localBot.mesh.rotation.y = remoteBot.rotation.y;
-
-          // Update health and state
-          localBot.health = remoteBot.health;
-          localBot.maxHealth = remoteBot.maxHealth;
-
-          // Handle death state
-          if (remoteBot.isDead && !localBot.isDead) {
-            localBot.die();
-          }
-        }
-      }
-    }
+    // This method is no longer needed as all entities are player-controlled
+    // But we keep it to handle any legacy messages
+    this.debug("All entities are now player-controlled");
   }
 
   // Set remote player color with better visibility
@@ -1531,5 +1498,395 @@ export class MultiplayerManager {
 
     this.updateDebugOverlay();
     this.debug("=================================");
+  }
+
+  // Game started
+  setupGameStartedEvent() {
+    if (!this.socket) return;
+
+    this.socket.on("gameStarted", (gameData) => {
+      debugLog("Game started event received", "success");
+      console.log("Game data:", gameData);
+
+      // We're now in a game
+      this.inGame = true;
+
+      // Check if player roles were assigned
+      if (gameData.roles && gameData.gorilla) {
+        // Store the gorilla player ID globally
+        this.gorillaPlayerId = gameData.gorilla.id;
+        debugLog(`Gorilla player ID: ${this.gorillaPlayerId}`, "info");
+
+        // Find my role
+        const myRole = gameData.roles.find(
+          (role) => role.id === this.socket.id
+        );
+
+        if (myRole) {
+          // Store whether I'm the gorilla
+          this.isGorilla = myRole.isGorilla;
+
+          if (this.isGorilla) {
+            // I am the gorilla
+            debugLog(`You've been assigned as the GORILLA!`, "success");
+
+            // Show message to the player
+            if (window.showMessage) {
+              window.showMessage(
+                "You are the GORILLA! Destroy the humans!",
+                "red",
+                10000
+              );
+            }
+
+            // Set the local player as gorilla if the game reference exists
+            if (this.gameRef && this.gameRef.player) {
+              this.gameRef.player.makeGorilla(this.scene, this.modelLoader);
+            }
+          } else {
+            // I am a human
+            debugLog(`You are a human. Watch out for the gorilla!`, "info");
+
+            // Show message to the player
+            if (window.showMessage) {
+              window.showMessage(
+                `${gameData.gorilla.name} is the GORILLA! Run for your life!`,
+                "yellow",
+                10000
+              );
+            }
+          }
+        }
+
+        // Announce the gorilla to all players
+        if (window.showMessage) {
+          window.showMessage(
+            `Game started! ${gameData.gorilla.name} is the gorilla!`,
+            "green",
+            5000
+          );
+        }
+
+        // Update any existing remote players who might be the gorilla
+        this.updateRemotePlayersWithGorillaRole();
+      }
+
+      // Join the game
+      this.joinGame();
+    });
+  }
+
+  // Update remote players with gorilla role
+  updateRemotePlayersWithGorillaRole() {
+    if (!this.gorillaPlayerId) return;
+
+    // Check all remote players to see if any are the gorilla
+    this.remotePlayersMap.forEach((playerData, playerId) => {
+      const isGorilla = playerId === this.gorillaPlayerId;
+
+      // Update the isGorilla flag
+      playerData.isGorilla = isGorilla;
+
+      if (
+        isGorilla &&
+        !playerData.isPlaceholder &&
+        !playerData.transformedToGorilla
+      ) {
+        debugLog(
+          `Converting remote player ${playerId} to gorilla model`,
+          "info"
+        );
+        this.transformRemotePlayerToGorilla(playerId);
+      }
+    });
+  }
+
+  // Add more visibility helpers for gorilla players
+  addGorillaVisibilityMarkers(player) {
+    // No visual indicators for clean gameplay
+    return null;
+  }
+
+  // Transform a remote player to gorilla
+  async transformRemotePlayerToGorilla(playerId) {
+    const playerData = this.remotePlayersMap.get(playerId);
+    if (!playerData || !playerData.player || playerData.transformedToGorilla)
+      return;
+
+    debugLog(`Transforming remote player ${playerId} to gorilla`, "info");
+
+    try {
+      // Create a new gorilla model
+      const remotePlayer = playerData.player;
+
+      // Store current position before transformation
+      const currentPosition = remotePlayer.group.position.clone();
+
+      // Mark as transformed to prevent multiple transformations
+      playerData.transformedToGorilla = true;
+
+      // Use the Player.makeGorilla method if it's a Player instance
+      if (remotePlayer.makeGorilla) {
+        await remotePlayer.makeGorilla(this.scene, this.modelLoader);
+        debugLog(
+          `Remote player ${playerId} transformed to gorilla via Player.makeGorilla`,
+          "success"
+        );
+
+        // Ensure the gorilla's position is at ground level but keep X/Z coordinates
+        remotePlayer.group.position.y = 0;
+        remotePlayer.group.position.x = currentPosition.x;
+        remotePlayer.group.position.z = currentPosition.z;
+
+        // Add visibility helpers
+        this.addGorillaVisibilityMarkers(remotePlayer);
+
+        // Also add a temporary screen indicator
+        const gorillaIndicator = document.createElement("div");
+        gorillaIndicator.textContent = "🦍 GORILLA PLAYER SPOTTED";
+        gorillaIndicator.style.position = "fixed";
+        gorillaIndicator.style.top = "60px";
+        gorillaIndicator.style.left = "50%";
+        gorillaIndicator.style.transform = "translateX(-50%)";
+        gorillaIndicator.style.backgroundColor = "rgba(139, 69, 19, 0.8)"; // Match gorilla color
+        gorillaIndicator.style.color = "white";
+        gorillaIndicator.style.padding = "5px 10px";
+        gorillaIndicator.style.borderRadius = "5px";
+        gorillaIndicator.style.fontWeight = "bold";
+        gorillaIndicator.style.fontSize = "16px";
+        gorillaIndicator.style.zIndex = "1000";
+        document.body.appendChild(gorillaIndicator);
+
+        // Remove the indicator after 5 seconds
+        setTimeout(() => {
+          if (gorillaIndicator.parentNode === document.body) {
+            document.body.removeChild(gorillaIndicator);
+          }
+        }, 5000);
+      } else {
+        // For placeholder players, we'll create a temporary gorilla indicator
+        const placeholder = remotePlayer.group;
+
+        // Ensure placeholder is positioned correctly
+        placeholder.position.y = 0;
+
+        // Make the placeholder more visible to represent a gorilla
+        if (placeholder.children.length > 0) {
+          placeholder.children.forEach((child) => {
+            if (child.isMesh && child.material) {
+              // Make it brown like the gorilla
+              child.material.color.setHex(0x8b4513);
+              // Scale it to human size
+              child.scale.set(1, 1, 1);
+            }
+          });
+        }
+
+        // Add visibility helpers
+        this.addGorillaVisibilityMarkers(placeholder);
+
+        debugLog(
+          `Remote player ${playerId} will be transformed to gorilla when fully loaded`,
+          "info"
+        );
+      }
+    } catch (error) {
+      debugLog(
+        `Error transforming remote player to gorilla: ${error.message}`,
+        "error"
+      );
+    }
+  }
+
+  // Get all other players for combat targeting
+  getOtherPlayers() {
+    const targets = [];
+
+    // Add all remote players to the targets list
+    this.remotePlayersMap.forEach((playerData) => {
+      if (playerData.player && !playerData.player.isDead) {
+        targets.push(playerData.player);
+      }
+    });
+
+    // If we have a local player and a game reference with a gorilla,
+    // include it as a potential target
+    if (
+      this.gameRef &&
+      this.gameRef.gorilla &&
+      this.localPlayer !== this.gameRef.gorilla
+    ) {
+      targets.push(this.gameRef.gorilla);
+    }
+
+    return targets;
+  }
+
+  // Send attack event to server
+  sendAttackEvent() {
+    if (!this.socket || !this.socket.connected) return;
+
+    try {
+      const attackData = {
+        id: this.socket.id,
+        isGorilla: this.isGorilla,
+      };
+
+      this.socket.emit("playerAttack", attackData);
+      this.debug("Sent attack event to server");
+    } catch (error) {
+      this.debug(`Error sending attack event: ${error.message}`);
+    }
+  }
+
+  // Handle a remote player's attack
+  handleRemotePlayerAttack(data) {
+    this.debug(
+      `Received attack from player ${data.id}, isGorilla: ${data.isGorilla}`
+    );
+
+    // If this is a network-controlled player attacking
+    const remotePlayerData = this.remotePlayersMap.get(data.id);
+    if (remotePlayerData && remotePlayerData.player) {
+      // Trigger attack animation
+      remotePlayerData.player.isAttacking = true;
+      remotePlayerData.player.attackTimer =
+        remotePlayerData.player.attackDuration || 0.5;
+      remotePlayerData.player.updateAnimation();
+
+      // Play attack sound
+      if (this.soundManager) {
+        const soundEffect = data.isGorilla ? "gorillaAttack" : "humanAttack";
+        this.soundManager.play(soundEffect);
+      }
+    }
+
+    // Check if our local player was hit (simple distance check)
+    if (
+      this.localPlayer &&
+      !this.localPlayer.isDead &&
+      !this.localPlayer.isInvulnerable
+    ) {
+      // Get the attacker's position
+      let attackerPosition = null;
+      if (remotePlayerData && remotePlayerData.player) {
+        attackerPosition = remotePlayerData.player.group.position;
+      }
+
+      // If we have attacker position, check if we're in range
+      if (attackerPosition) {
+        const distance =
+          this.localPlayer.group.position.distanceTo(attackerPosition);
+
+        // If in range and facing us, take damage
+        if (distance <= (data.isGorilla ? 3 : 2)) {
+          // Calculate direction to check if attacker is facing us
+          const localPos = this.localPlayer.group.position;
+          const attackerPos = attackerPosition;
+
+          // Direction from attacker to us
+          const direction = new THREE.Vector3()
+            .subVectors(localPos, attackerPos)
+            .normalize();
+
+          // Attacker's forward direction - using -Z as forward to match Player class
+          const attackerForward = new THREE.Vector3(0, 0, -1).applyAxisAngle(
+            new THREE.Vector3(0, 1, 0),
+            remotePlayerData.player.group.rotation.y
+          );
+
+          // Dot product to check if we're in front of attacker
+          const dot = direction.dot(attackerForward);
+
+          // If dot product is positive, we're in front of the attacker
+          if (dot > 0.3) {
+            this.debug(`Local player hit by ${data.id}! Taking damage...`);
+
+            // Apply damage to local player
+            this.localPlayer.onAttacked(data.id, data.isGorilla);
+
+            // Update health bar if available
+            if (this.gameRef && this.gameRef.healthBar) {
+              this.gameRef.healthBar.setHealth(this.localPlayer.health);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Add a new method to color remote players distinctly
+  colorRemotePlayer(player, playerId) {
+    // Generate a bright, distinct color based on player ID
+    const colors = [
+      0xff0000, // Red
+      0x00ff00, // Green
+      0x0000ff, // Blue
+      0xff00ff, // Magenta
+      0xffff00, // Yellow
+      0x00ffff, // Cyan
+      0xff8000, // Orange
+    ];
+
+    const colorIndex = Math.abs(this.simpleHash(playerId)) % colors.length;
+    const color = colors[colorIndex];
+
+    console.log(
+      `Coloring remote player ${playerId} with color: ${color.toString(16)}`
+    );
+
+    if (player.model) {
+      // Apply color to the model
+      player.model.traverse((node) => {
+        if (node.isMesh && node.material) {
+          if (Array.isArray(node.material)) {
+            node.material.forEach((mat) => {
+              if (mat.color) {
+                // Brighten the color
+                const r = ((color >> 16) & 255) / 255;
+                const g = ((color >> 8) & 255) / 255;
+                const b = (color & 255) / 255;
+                mat.color.setRGB(r, g, b);
+                mat.emissive = new THREE.Color(r / 3, g / 3, b / 3);
+              }
+            });
+          } else if (node.material.color) {
+            // Brighten the color
+            const r = ((color >> 16) & 255) / 255;
+            const g = ((color >> 8) & 255) / 255;
+            const b = (color & 255) / 255;
+            node.material.color.setRGB(r, g, b);
+            node.material.emissive = new THREE.Color(r / 3, g / 3, b / 3);
+          }
+        }
+      });
+    }
+
+    // Also apply to any placeholder
+    if (player.placeholder) {
+      if (player.placeholder.material) {
+        player.placeholder.material.color.setHex(color);
+        player.placeholder.material.opacity = 0.9;
+      }
+    }
+
+    // Also color any children of the group that might be meshes
+    player.group.traverse((child) => {
+      if (child.isMesh && child.material && child.material.color) {
+        child.material.color.setHex(color);
+        child.material.opacity = 0.9;
+      }
+    });
+  }
+
+  // Implement a simple hash function for consistent colors
+  simpleHash(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = (hash << 5) - hash + char;
+      hash = hash & hash; // Convert to 32bit integer
+    }
+    return Math.abs(hash);
   }
 }

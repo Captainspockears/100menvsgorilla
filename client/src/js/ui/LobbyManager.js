@@ -716,9 +716,27 @@ export class LobbyManager {
   // Kick a player from lobby (host only)
   kickPlayer(playerId) {
     if (!this.socket || !this.isHost) {
+      console.error("Cannot kick player - not connected or not host");
       return;
     }
 
+    if (!playerId) {
+      console.error("Cannot kick player - no player ID provided");
+      return;
+    }
+
+    console.log(`Attempting to kick player with ID: ${playerId}`);
+
+    // Show a message to the user
+    if (window.showMessage) {
+      const playerToKick = this.currentLobby?.players.find(
+        (p) => p.id === playerId
+      );
+      const playerName = playerToKick?.name || "Unknown player";
+      window.showMessage(`Kicking ${playerName}...`, "orange");
+    }
+
+    // Send the kick event to the server
     this.socket.emit("kickPlayer", { playerId });
   }
 

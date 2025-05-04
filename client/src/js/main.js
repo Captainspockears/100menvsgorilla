@@ -2,47 +2,12 @@ import * as THREE from "three";
 import { Controls } from "./controls/Controls.js";
 import { Player } from "./entities/Player.js";
 import { Gorilla } from "./entities/Gorilla.js";
-import { Bot } from "./entities/Bot.js";
 import { Environment } from "./entities/Environment.js";
 import { SoundManager } from "./utils/SoundManager.js";
 import { HealthBar } from "./ui/HealthBar.js";
 import { ModelLoader } from "./utils/ModelLoader.js";
 import { MultiplayerManager } from "./multiplayer/MultiplayerManager.js";
 import { LobbyManager } from "./ui/LobbyManager.js";
-
-// Debug helper function
-function displayDebugInfo(enabled = true) {
-  if (!enabled) return;
-
-  // Create debug panel
-  const debugPanel = document.createElement("div");
-  debugPanel.style.position = "absolute";
-  debugPanel.style.top = "10px";
-  debugPanel.style.left = "10px";
-  debugPanel.style.backgroundColor = "rgba(0, 0, 0, 0.7)";
-  debugPanel.style.color = "white";
-  debugPanel.style.padding = "10px";
-  debugPanel.style.fontFamily = "monospace";
-  debugPanel.style.fontSize = "12px";
-  debugPanel.style.maxWidth = "400px";
-  debugPanel.style.maxHeight = "200px";
-  debugPanel.style.overflow = "auto";
-  debugPanel.style.zIndex = "1000";
-  debugPanel.id = "debug-panel";
-
-  document.body.appendChild(debugPanel);
-
-  // Update function
-  window.updateDebug = function (text) {
-    const panel = document.getElementById("debug-panel");
-    if (panel) {
-      panel.innerHTML = text;
-    }
-  };
-
-  // Initial content
-  window.updateDebug("Debug panel initialized");
-}
 
 // Show message in chat/notification area
 export function showMessage(message, color = "white", duration = 5000) {
@@ -69,47 +34,66 @@ export function showMessage(message, color = "white", duration = 5000) {
   messageElement.textContent = message;
   messageElement.style.color = color;
   messageElement.style.marginBottom = "5px";
-  messageElement.style.fontFamily = "Arial, sans-serif";
-  messageElement.style.fontSize = "14px";
+  messageElement.style.fontSize = "16px";
+  messageElement.style.fontWeight = "bold";
+  messageElement.style.textShadow = "1px 1px 2px rgba(0,0,0,0.5)";
 
-  // Add to container
+  // Add message to container
   messageContainer.appendChild(messageElement);
 
-  // Scroll to bottom
-  messageContainer.scrollTop = messageContainer.scrollHeight;
-
-  // Remove after duration
+  // Remove message after duration
   setTimeout(() => {
     if (messageElement.parentNode === messageContainer) {
       messageContainer.removeChild(messageElement);
     }
   }, duration);
+
+  // Remove container if empty
+  if (messageContainer.childElementCount === 0) {
+    setTimeout(() => {
+      if (
+        messageContainer.childElementCount === 0 &&
+        messageContainer.parentNode
+      ) {
+        messageContainer.parentNode.removeChild(messageContainer);
+      }
+    }, duration + 100);
+  }
 }
 
 // Game class
 class Game {
   constructor() {
+    // Properties
+    this.scene = new THREE.Scene();
+    this.renderer = null;
+    this.camera = null;
+    this.player = null;
+    this.soundManager = null;
+    this.isInitialized = false;
+    this.healthBar = null;
+    this.loadingScreen = null;
+    this.modelLoader = new ModelLoader();
+    this.isSoundInitialized = false;
+    this.gameState = "playing"; // 'playing' or 'gameOver'
+    this.gameTimer = 0;
+    this.multiplayer = null;
+
     // Create start menu first
     this.createStartMenu();
-
-    // Enable debug
-    displayDebugInfo(true);
 
     // Create message container for chat and notifications
     this.createMessageContainer();
 
     // Setup sound manager first
     this.soundManager = new SoundManager();
-    this.isSoundInitialized = false;
+    this.initializeSound();
 
     // Setup model loader
     this.modelLoader = new ModelLoader();
 
     // Loading screen
     this.showLoadingScreen();
-
-    // Setup scene, camera, and renderer
-    this.scene = new THREE.Scene();
 
     // Add lighting to the scene
     this.setupLighting();
@@ -122,11 +106,12 @@ class Game {
     const gridHelper = new THREE.GridHelper(50, 50);
     this.scene.add(gridHelper);
 
+    // Camera with wider field of view and better clipping planes for multiplayer visibility
     this.camera = new THREE.PerspectiveCamera(
-      75,
+      100, // Wider field of view (was 90)
       window.innerWidth / window.innerHeight,
       0.1,
-      1000
+      2000 // Much further draw distance for seeing other players (was 1000)
     );
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
@@ -156,14 +141,16 @@ class Game {
     // Create player and gorilla with proper model loading
     this.loadGameEntities();
 
-    // Position camera
-    this.camera.position.set(0, 5, 10);
+    // Position camera higher and further back for a better view
+    this.camera.position.set(0, 10, 15); // Place behind player, along positive Z
     if (this.player) {
       this.camera.lookAt(this.player.position);
     }
 
     // Setup controls - pass the camera
     this.controls = new Controls(this.player, this.camera);
+    // Provide controls with reference to the game instance
+    this.controls.game = this;
 
     // Initialize multiplayer
     this.multiplayer = new MultiplayerManager(
@@ -177,6 +164,19 @@ class Game {
 
     // Provide reference to the game instance
     this.multiplayer.setGameReference(this);
+
+    // Provide player with reference to multiplayer manager
+    if (this.player) {
+      this.player.multiplayerManager = this.multiplayer;
+      console.log(
+        "Set player.multiplayerManager =",
+        this.player.multiplayerManager ? "instance provided" : "null"
+      );
+    } else {
+      console.log(
+        "Warning: Can't set multiplayerManager on player - player is not initialized"
+      );
+    }
 
     // Set up additional multiplayer event listeners
     this.setupMultiplayerEvents();
@@ -192,6 +192,9 @@ class Game {
       once: true,
     });
 
+    // Add cleanup on window close
+    window.addEventListener("beforeunload", this.cleanup.bind(this));
+
     // Start the game loop
     this.animate();
 
@@ -201,27 +204,6 @@ class Game {
       "#4CAF50",
       10000
     );
-  }
-
-  // Create message container for multiplayer chat and notifications
-  createMessageContainer() {
-    // Create message container if not exists
-    let messageContainer = document.getElementById("message-container");
-    if (!messageContainer) {
-      messageContainer = document.createElement("div");
-      messageContainer.id = "message-container";
-      messageContainer.style.position = "absolute";
-      messageContainer.style.bottom = "10px";
-      messageContainer.style.left = "10px";
-      messageContainer.style.width = "400px";
-      messageContainer.style.maxHeight = "200px";
-      messageContainer.style.overflow = "auto";
-      messageContainer.style.backgroundColor = "rgba(0, 0, 0, 0.5)";
-      messageContainer.style.padding = "10px";
-      messageContainer.style.borderRadius = "5px";
-      messageContainer.style.zIndex = "1000";
-      document.body.appendChild(messageContainer);
-    }
   }
 
   // Setup additional multiplayer event listeners
@@ -267,54 +249,35 @@ class Game {
   }
 
   setupLighting() {
-    // Ambient light (provides basic illumination for all objects)
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    // Ambient light
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
     this.scene.add(ambientLight);
 
-    // Directional light (simulates sunlight)
+    // Directional light (sun)
     const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    directionalLight.position.set(50, 100, 50);
+    directionalLight.position.set(50, 200, 100);
     directionalLight.castShadow = true;
-
-    // Improve shadow quality
     directionalLight.shadow.mapSize.width = 1024;
     directionalLight.shadow.mapSize.height = 1024;
-    directionalLight.shadow.camera.near = 10;
-    directionalLight.shadow.camera.far = 200;
-    directionalLight.shadow.camera.left = -50;
-    directionalLight.shadow.camera.right = 50;
-    directionalLight.shadow.camera.top = 50;
-    directionalLight.shadow.camera.bottom = -50;
-
+    directionalLight.shadow.camera.near = 0.5;
+    directionalLight.shadow.camera.far = 500;
+    directionalLight.shadow.camera.left = -100;
+    directionalLight.shadow.camera.right = 100;
+    directionalLight.shadow.camera.top = 100;
+    directionalLight.shadow.camera.bottom = -100;
     this.scene.add(directionalLight);
 
-    // Add a hemisphere light (simulates sky and ground reflection)
-    const hemisphereLight = new THREE.HemisphereLight(0x87ceeb, 0x3a5f0b, 0.6);
+    // Add hemisphere light
+    const hemisphereLight = new THREE.HemisphereLight(0x0000ff, 0x00ff00, 0.3);
     this.scene.add(hemisphereLight);
-
-    this.updateDebug("Lighting set up");
   }
 
   async loadGameEntities() {
     try {
       // Create player and wait for it to load
       this.player = new Player(this.scene, this.soundManager, this.modelLoader);
-      this.updateDebug("Player created");
 
-      // Create gorilla and wait for it to load
-      this.gorilla = new Gorilla(
-        this.scene,
-        this.soundManager,
-        this.modelLoader
-      );
-      this.updateDebug("Gorilla created");
-
-      this.bots = [];
-      // Create 10 bots
-      for (let i = 0; i < 10; i++) {
-        this.bots.push(new Bot(this.scene));
-      }
-      this.updateDebug("Bots created");
+      // We no longer create a default gorilla or bots here as they will be controlled by players
 
       // Remove loading screen after a short delay
       setTimeout(() => {
@@ -322,17 +285,6 @@ class Game {
       }, 3000);
     } catch (error) {
       console.error("Error loading game entities:", error);
-      this.updateDebug("Error loading game entities: " + error.message);
-    }
-  }
-
-  updateDebug(message) {
-    if (window.updateDebug) {
-      const time = new Date().toLocaleTimeString();
-      window.updateDebug(
-        window.document.getElementById("debug-panel").innerHTML +
-          `<br>${time}: ${message}`
-      );
     }
   }
 
@@ -373,18 +325,14 @@ class Game {
   }
 
   async initializeSound() {
-    if (this.isSoundInitialized) return;
-
     try {
       await this.soundManager.initialize();
       this.isSoundInitialized = true;
-      this.updateDebug("Sound initialized");
 
       // Add mute toggle button
       this.addMuteButton();
     } catch (error) {
       console.error("Failed to initialize sound:", error);
-      this.updateDebug("Sound initialization failed: " + error.message);
     }
   }
 
@@ -417,38 +365,29 @@ class Game {
   }
 
   animate() {
-    requestAnimationFrame(this.animate.bind(this));
+    this._animationFrameId = requestAnimationFrame(this.animate.bind(this));
 
     const deltaTime = this.clock.getDelta();
 
     // Update entities
     if (this.controls) this.controls.update(deltaTime);
     if (this.player) this.player.update(deltaTime);
+    // No more humanBot to update
 
-    // Update gorilla to chase bots instead of player
-    if (this.gorilla) {
-      this.gorilla.update(deltaTime, this.player, this.bots);
-    }
-
-    // Update bots with gorilla awareness
-    if (this.bots && this.gorilla) {
-      this.bots.forEach((bot) =>
-        bot.update(deltaTime, this.gorilla, this.bots)
-      );
-    }
+    // No need to update gorilla and bots, they are controlled by human players now
 
     // Update multiplayer (remote players)
     if (this.multiplayer) {
       this.multiplayer.update(deltaTime);
     }
 
-    // Update camera position to follow player from behind (Fortnite style)
+    // Update camera position to follow player from behind (over-the-shoulder view)
     if (this.player && !this.player.isDead) {
-      // Camera parameters
-      const distance = 7; // Distance behind player
-      const height = 3.5; // Height above player
-      const lookAtOffset = 1; // Look at point above player's head
-      const smoothness = 0.05; // Camera smoothness (lower = smoother)
+      // Camera parameters - adjusted for high over-the-shoulder view
+      const distance = 4; // Distance behind player
+      const height = this.player.isGorilla ? 4.0 : 4.0; // Maintain user's height settings
+      const lookAtOffset = this.player.isGorilla ? 2.0 : 2.0; // Add a lookAtOffset to prevent circular motion
+      const smoothness = 0.15; // Camera movement smoothness
 
       // Get the player's rotation and direction
       const playerAngle = this.player.group.rotation.y;
@@ -460,17 +399,31 @@ class Game {
       // Calculate desired camera position (behind player based on their rotation)
       const cameraPosition = new THREE.Vector3();
       cameraPosition.copy(this.player.position);
-      cameraPosition.x -= offsetX; // Position based on player rotation
-      cameraPosition.z -= offsetZ; // Position based on player rotation
+      cameraPosition.x -= offsetX;
+      cameraPosition.z -= offsetZ;
       cameraPosition.y = this.player.position.y + height;
+
+      // Center the camera directly behind player with no offset
+      const shoulderOffset = 0.0; // Remove shoulder offset (was 0.6)
+      const rightVector = new THREE.Vector3(
+        Math.sin(playerAngle + Math.PI / 2) * shoulderOffset,
+        0,
+        Math.cos(playerAngle + Math.PI / 2) * shoulderOffset
+      );
+      cameraPosition.add(rightVector);
 
       // Smoothly move camera to this position
       this.camera.position.lerp(cameraPosition, smoothness);
 
-      // Look at point slightly above player's head
+      // Look at point ahead of player in the direction they're facing
       const lookAtPosition = new THREE.Vector3();
       lookAtPosition.copy(this.player.position);
-      lookAtPosition.y += lookAtOffset;
+
+      // Look ahead of the player in the direction they're facing
+      lookAtPosition.x += Math.sin(playerAngle) * lookAtOffset;
+      lookAtPosition.z += Math.cos(playerAngle) * lookAtOffset;
+      lookAtPosition.y += 1.0; // Look slightly above ground level
+
       this.camera.lookAt(lookAtPosition);
     }
 
@@ -478,59 +431,25 @@ class Game {
     this.renderer.render(this.scene, this.camera);
   }
 
-  restart() {
-    // Reset player
-    if (this.player) this.player.reset();
-
-    // Reset health bar
-    this.healthBar.reset();
-
-    // Create a new gorilla if the current one is dead
-    if (this.gorilla && this.gorilla.isDead) {
-      // Remove old gorilla if needed
-      if (this.gorilla.mesh) {
-        this.scene.remove(this.gorilla.mesh);
-      }
-
-      // Create new gorilla
-      this.gorilla = new Gorilla(
-        this.scene,
-        this.soundManager,
-        this.modelLoader
-      );
-    } else if (this.gorilla) {
-      // Otherwise just reset position and state
-      this.gorilla.mesh.position.set(15, 0, 15);
-      this.gorilla.isAttacking = false;
-      this.gorilla.attackCooldown = 0;
-      this.gorilla.health = this.gorilla.maxHealth;
-      this.gorilla.isDead = false;
-      if (this.gorilla.resetAttackState) {
-        this.gorilla.resetAttackState();
-      }
+  async restart() {
+    // Reset player health
+    if (this.player) {
+      this.player.health = this.player.maxHealth;
     }
 
-    // Create new bots to replace any that died
-    const botsToCreate =
-      10 - (this.bots ? this.bots.filter((bot) => !bot.isDead).length : 0);
-    for (let i = 0; i < botsToCreate; i++) {
-      this.bots.push(new Bot(this.scene));
-    }
+    // Reset game state
+    this.gameState = "playing";
 
-    // Reset camera
-    this.camera.position.set(0, 5, 10);
-    if (this.player) this.camera.lookAt(this.player.position);
+    // Reset timer
+    this.gameTimer = 0;
 
-    // Show restart message
-    showMessage("Game restarted!", "#4CAF50");
+    console.log("Game restarted - players maintain their roles");
 
-    // Let the server know about the restart if in multiplayer
-    if (
-      this.multiplayer &&
-      this.multiplayer.socket &&
-      this.multiplayer.socket.connected
-    ) {
-      this.multiplayer.socket.emit("resetGame");
+    // If in multiplayer mode, notify the server about restart
+    if (this.multiplayer && this.multiplayer.socket) {
+      this.multiplayer.socket.emit("playerReady", {
+        id: this.multiplayer.socket.id,
+      });
     }
   }
 
@@ -826,10 +745,112 @@ class Game {
       }, 2000);
     }
   }
-}
 
-// Make showMessage available globally for other modules
-window.showMessage = showMessage;
+  // Clean up all resources
+  cleanup() {
+    // Stop all intervals
+    this.cleanupIntervals();
+
+    // Disconnect from multiplayer if connected
+    if (this.multiplayer && this.multiplayer.socket) {
+      this.multiplayer.leaveGame();
+      this.multiplayer.socket.disconnect();
+    }
+
+    // Stop animation loop
+    if (this._animationFrameId) {
+      cancelAnimationFrame(this._animationFrameId);
+      this._animationFrameId = null;
+    }
+
+    // Remove all event listeners
+    window.removeEventListener("resize", this.onWindowResize);
+    window.removeEventListener("beforeunload", this.cleanup);
+
+    // Dispose of renderer
+    if (this.renderer) {
+      this.renderer.dispose();
+      if (this.renderer.domElement && this.renderer.domElement.parentNode) {
+        this.renderer.domElement.parentNode.removeChild(
+          this.renderer.domElement
+        );
+      }
+    }
+
+    // Clean up THREE.js resources
+    this.disposeSceneResources(this.scene);
+  }
+
+  // Dispose of THREE.js resources to prevent memory leaks
+  disposeSceneResources(obj) {
+    if (!obj) return;
+
+    // Handle arrays
+    if (Array.isArray(obj)) {
+      obj.forEach((item) => this.disposeSceneResources(item));
+      return;
+    }
+
+    // If object has children, dispose them first
+    if (obj.children) {
+      const children = [...obj.children]; // Clone to avoid modification during iteration
+      children.forEach((child) => this.disposeSceneResources(child));
+    }
+
+    // Dispose of geometries and materials
+    if (obj.geometry) {
+      obj.geometry.dispose();
+    }
+
+    if (obj.material) {
+      if (Array.isArray(obj.material)) {
+        obj.material.forEach((material) => {
+          if (material.map) material.map.dispose();
+          material.dispose();
+        });
+      } else {
+        if (obj.material.map) obj.material.map.dispose();
+        obj.material.dispose();
+      }
+    }
+
+    // Handle textures
+    if (obj.texture) {
+      obj.texture.dispose();
+    }
+
+    // Handle specific types
+    if (obj.dispose && typeof obj.dispose === "function") {
+      obj.dispose();
+    }
+  }
+
+  // Clean up all intervals when needed
+  cleanupIntervals() {
+    // No more bot intervals to clean up
+  }
+
+  // Create message container for multiplayer chat and notifications
+  createMessageContainer() {
+    // Create message container if not exists
+    let messageContainer = document.getElementById("message-container");
+    if (!messageContainer) {
+      messageContainer = document.createElement("div");
+      messageContainer.id = "message-container";
+      messageContainer.style.position = "absolute";
+      messageContainer.style.bottom = "10px";
+      messageContainer.style.left = "10px";
+      messageContainer.style.width = "400px";
+      messageContainer.style.maxHeight = "200px";
+      messageContainer.style.overflow = "auto";
+      messageContainer.style.backgroundColor = "rgba(0, 0, 0, 0.5)";
+      messageContainer.style.padding = "10px";
+      messageContainer.style.borderRadius = "5px";
+      messageContainer.style.zIndex = "1000";
+      document.body.appendChild(messageContainer);
+    }
+  }
+}
 
 // Wait for DOM to load before starting the game
 document.addEventListener("DOMContentLoaded", () => {

@@ -8,6 +8,9 @@ export class HealthBar {
     this.isDead = false;
 
     this.createUI();
+
+    // Hide the health bar initially
+    this.container.style.opacity = "0";
   }
 
   createUI() {

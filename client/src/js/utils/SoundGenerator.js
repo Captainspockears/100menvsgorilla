@@ -19,6 +19,51 @@ export class SoundGenerator {
     });
   }
 
+  // Generate human attack sound (quick punch/swoosh)
+  generateHumanAttackSound() {
+    return this.generateSound({
+      frequency: 220,
+      type: "sine",
+      duration: 0.2,
+      attack: 0.01,
+      decay: 0.05,
+      sustain: 0.05,
+      release: 0.1,
+      volume: 0.5,
+      frequencyEnd: 280,
+    });
+  }
+
+  // Generate gorilla attack sound (deeper, more powerful)
+  generateGorillaAttackSound() {
+    return this.generateSound({
+      frequency: 100,
+      type: "sawtooth",
+      duration: 0.4,
+      attack: 0.02,
+      decay: 0.1,
+      sustain: 0.2,
+      release: 0.2,
+      volume: 0.7,
+      frequencyEnd: 80,
+    });
+  }
+
+  // Generate gorilla roar sound
+  generateGorillaRoarSound() {
+    return this.generateSound({
+      frequency: 70,
+      type: "sawtooth",
+      duration: 1.0,
+      attack: 0.1,
+      decay: 0.2,
+      sustain: 0.5,
+      release: 0.3,
+      volume: 0.8,
+      frequencyEnd: 120,
+    });
+  }
+
   // Generate damage sound
   generateDamageSound() {
     return this.generateSound({
